@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Discourse Extras
-// @namespace    ethandacatProductions
+// @namespace    devcat
 // @version      2.4
 // @description  More for viewing, less for writing.
-// @author       Cat Productions
+// @author       Devcat Studios
 // @match        https://x-camp.discourse.group/*
 // @icon         https://d3bpeqsaub0i6y.cloudfront.net/user_avatar/meta.discourse.org/discourse/48/148734_2.png
 // @grant       GM_setClipboard
