@@ -19,7 +19,7 @@ A userscript to extend Discourse post rendering with extra visual and secret-mes
 
 Install with a userscript manager like **Violentmonkey** or **Tampermonkey**:
 
-- [Direct install link](https://github.com/ethandacat/discourse-extras/raw/refs/heads/main/main.user.js)
+- [Direct install link](https://github.com/Devcat-Studios/discourse-extras/raw/refs/heads/main/main.user.js)
 
 ---
 
