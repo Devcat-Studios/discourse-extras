@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Discourse Extras
 // @namespace    devcat
-// @version      2.4
+// @version      2.5
 // @description  More for viewing, less for writing.
 // @author       Devcat Studios
 // @match        https://x-camp.discourse.group/*
@@ -373,18 +373,13 @@ setTimeout(function () {
     ab.onclick = doit;
     document.querySelector("#sidebar-section-content-community").appendChild(ab);
     document.querySelectorAll('.cooked').forEach(processCookedElement);
-}, 1000);
 
-(function () {
-    'use strict';
 
     const spamRegex = /This is the spam/i;
 
-    const btn = document.createElement('button');
-    btn.innerHTML = `<span class="sidebar-section-link-prefix icon"><svg class="fa d-icon svg-icon svg-string" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><use href="#flag"></use></svg></span><span class="sidebar-section-link-content-text">Flag Spam Posts</span>`;
-    btn.className = "fk-d-menu__trigger sidebar-more-section-trigger sidebar-section-link sidebar-more-section-links-details-summary sidebar-row --link-button sidebar-section-link sidebar-row";
-    btn.style.margin = "10px";
-
+    const btn = document.createElement('div');
+    btn.innerHTML = `<a id="ember5" class="ember-view sidebar-section-link sidebar-row" title="All topics" data-link-name="dextra" href="javascript:void(0)"><span class="sidebar-section-link-prefix icon"><svg class="fa d-icon svg-icon svg-string" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><use href="#flag"></use></svg></span><span class="sidebar-section-link-content-text">Flag Spam Posts</span></a>`;
+    btn.style.width="100%";
     btn.onclick = () => {
         const posts = document.querySelectorAll('.topic-post');
         const spamPosts = [];
@@ -401,47 +396,104 @@ setTimeout(function () {
         });
 
         if (spamPosts.length === 0) {
-            alert("No spam posts found.");
-            return;
-        }
+  // Remove existing modal if any
+  document.querySelector(".dextra-flagspam-modal")?.remove();
 
-        const popup = window.open("", "FlagSpamPopup", "width=350,height=200");
-        if (!popup) {
-            alert("Popup blocked! Please allow popups.");
-            return;
-        }
+  const emptyModalHTML = `
+  <div class="modal-container dextra-flagspam-modal">
+    <div class="modal d-modal create-invite-modal" aria-modal="true" role="dialog">
+      <div class="d-modal__container">
+        <div class="d-modal__header">
+          <div class="d-modal__title">
+            <h1 class="d-modal__title-text">No Spam Posts</h1>
+          </div>
+          <button class="btn no-text btn-icon btn-transparent modal-close dextra-hailnah2" title="close" type="button">
+            <svg class="fa d-icon d-icon-xmark svg-icon svg-string" xmlns="http://www.w3.org/2000/svg">
+              <use href="#xmark"></use>
+            </svg>
+          </button>
+        </div>
+        <div class="d-modal__body">
+          <p>You're all clear! No spam posts were found. 🎉</p>
+        </div>
+        <div class="d-modal__footer">
+          <button class="btn btn-text btn-primary dextra-hailnah" type="button">
+            <span class="d-button-label">Nice</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="d-modal__backdrop"></div>
+  </div>
+  `;
 
-        popup.document.write(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-              <title>Flag Spam Posts</title>
-              <style>
-                body { font-family: Arial, sans-serif; padding: 20px; }
-                button { margin: 10px; padding: 10px 20px; font-size: 16px; cursor: pointer; }
-              </style>
-            </head>
-            <body>
-              <p>Found ${spamPosts.length} spam posts. Is this okay?</p>
-              <button id="yesBtn" style="background-color:#d9534f; color:white;">Yes, flag them</button>
-              <button id="noBtn" style="background-color:#6c757d; color:white;">No, cancel</button>
-            </body>
-            </html>
-        `);
-        popup.document.close();
+  const droot = document.querySelector(".discourse-root") || document.body;
+  droot.insertAdjacentHTML("beforeend", emptyModalHTML);
 
-        const script = popup.document.createElement('script');
-        script.textContent = `
-            document.getElementById('yesBtn').onclick = () => {
-                window.opener.postMessage({ action: 'flagConfirmed' }, '*');
-                window.close();
-            };
-            document.getElementById('noBtn').onclick = () => {
-                window.opener.postMessage({ action: 'flagCancelled' }, '*');
-                window.close();
-            };
-        `;
-        popup.document.body.appendChild(script);
+  document.querySelector(".dextra-hailnah").onclick =
+  document.querySelector(".dextra-hailnah2").onclick = () => {
+    document.querySelector(".dextra-flagspam-modal")?.remove();
+  };
+
+  return;
+}
+
+
+        // Create modal HTML
+const modalHTML = `
+<div class="modal-container dextra-flagspam-modal">
+  <div class="modal d-modal create-invite-modal" data-keyboard="false" aria-modal="true" role="dialog" aria-labelledby="discourse-modal-title">
+    <div class="d-modal__container">
+      <div class="d-modal__header">
+        <div class="d-modal__title">
+          <h1 id="discourse-modal-title" class="d-modal__title-text">Flag Spam Posts</h1>
+        </div>
+        <button class="btn no-text btn-icon btn-transparent modal-close dextra-hailnah2" title="close" type="button">
+          <svg class="fa d-icon d-icon-xmark svg-icon svg-string" xmlns="http://www.w3.org/2000/svg">
+            <use href="#xmark"></use>
+          </svg>
+          <span aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="d-modal__body" tabindex="-1">
+        <p>Found ${spamPosts.length} spam posts. Is this okay?</p>
+      </div>
+      <div class="d-modal__footer">
+        <button class="btn btn-text btn-primary dextra-lesgo" autofocus="true" type="button">
+          <span class="d-button-label">Yes, flag them</span>
+        </button>
+        <button class="btn btn-text btn-transparent dextra-hailnah" type="button">
+          <span class="d-button-label">Cancel</span>
+        </button>
+      </div>
+    </div>
+  </div>
+  <div class="d-modal__backdrop"></div>
+</div>
+`;
+
+// Remove existing modal if any
+document.querySelector(".dextra-flagspam-modal")?.remove();
+
+// Append modal to document
+const droot = document.querySelector(".discourse-root") || document.body;
+droot.insertAdjacentHTML("beforeend", modalHTML);
+
+// Modal logic
+document.querySelector(".dextra-lesgo").onclick = () => {
+  window.postMessage({ action: "flagConfirmed" }, "*");
+  document.querySelector(".dextra-flagspam-modal")?.remove();
+};
+
+document.querySelector(".dextra-hailnah").onclick = () => {
+  window.postMessage({ action: "flagCancelled" }, "*");
+  document.querySelector(".dextra-flagspam-modal")?.remove();
+};
+
+document.querySelector(".dextra-hailnah2").onclick = () => {
+  document.querySelector(".dextra-flagspam-modal")?.remove();
+};
+
 
         function cleanStyles() {
             spamPosts.forEach(post => {
@@ -530,4 +582,5 @@ setTimeout(function () {
         console.warn("Sidebar not found, cannot insert Flag Spam button.");
     }
 
-})();
+}, 1000);
+
