@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Discourse Extras
 // @namespace    devcat
-// @version      2.6
+// @version      2.5
 // @description  More for viewing, less for writing.
 // @author       Devcat Studios
 // @match        https://x-camp.discourse.group/*
@@ -16,19 +16,21 @@ GM_addStyle(`
   .mfp-bg {
     background: rgba(0, 0, 0, 0.8) !important;
   }
+  .c-navbar-container {
+      z-index:10000;
+  }
 `);
-
 var script = document.createElement("script");
 script.src = "https://kit.fontawesome.com/fcc6f02ae0.js";
 script.crossOrigin = "anonymous";
-document.head.appendChild(script);
-
-
+document
+    .head
+    .appendChild(script);
 async function showRaw(postId) {
     const response = await fetch(`/posts/${postId}.json`);
     const data = await response.json();
     console.log(data.raw);
-    return data.raw;
+    return data.raw
 }
 function escapeHtml(str) {
     return str
@@ -36,181 +38,165 @@ function escapeHtml(str) {
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
+        .replace(/'/g, "&#39;")
 }
 const rawbuttonhtml = `
 <i class="fa-brands fa-markdown"></i>
 <span aria-hidden="true">
         </span>
-`
-
-
+`;
 function doesFAIconExist(iconClass) {
-    // Create temp element
     const el = document.createElement('i');
     el.className = `fa fa-${iconClass}`;
     el.style.position = 'absolute';
     el.style.visibility = 'hidden';
-    document.body.appendChild(el);
-
-    // Check computed style (content)
+    document
+        .body
+        .appendChild(el);
     const style = window.getComputedStyle(el, '::before');
     const content = style.getPropertyValue('content');
-
-    document.body.removeChild(el);
-
-    return content && content !== 'none' && content !== '""';
+    document
+        .body
+        .removeChild(el);
+    return content && content !== 'none' && content !== '""'
 }
-
 function encodeObfuscated(str, key) {
     let strBytes = new TextEncoder().encode(str);
     let keyBytes = new TextEncoder().encode(key);
     let encodedBytes = strBytes.map((b, i) => b ^ keyBytes[i % keyBytes.length]);
     let base64 = btoa(String.fromCharCode(...encodedBytes));
-    return "XxH@" + base64.split("").reverse().join("") + "@HxX";
+    return "XxH@" + base64
+        .split("")
+        .reverse()
+        .join("") + "@HxX"
 }
-
 function decodeObfuscated(obfStr, key, triedFallback = false) {
     try {
-        let cleaned = obfStr.replace(/^XxH@/, "").replace(/@HxX$/, "");
-        let reversed = cleaned.split("").reverse().join("");
+        let cleaned = obfStr
+            .replace(/^XxH@/, "")
+            .replace(/@HxX$/, "");
+        let reversed = cleaned
+            .split("")
+            .reverse()
+            .join("");
         let decodedStr = atob(reversed);
         let decodedBytes = new Uint8Array([...decodedStr].map(c => c.charCodeAt(0)));
-
         let keyBytes = new TextEncoder().encode(key);
         let originalBytes = decodedBytes.map((b, i) => b ^ keyBytes[i % keyBytes.length]);
         let cem = new TextDecoder().decode(originalBytes);
-
         if (!cem.startsWith("dextrapm")) {
             if (!triedFallback && key !== "discourse") {
-                return decodeObfuscated(obfStr, "discourse", true);
+                return decodeObfuscated(obfStr, "discourse", true)
             }
-            return "[This message is NOT for you!]";
+            return "[This message is NOT for you!]"
         }
-
-        return cem.replace("dextrapm", "");
+        return cem.replace("dextrapm", "")
     } catch (e) {
         if (!triedFallback && key !== "discourse") {
-            return decodeObfuscated(obfStr, "discourse", true);
+            return decodeObfuscated(obfStr, "discourse", true)
         }
-        return "[This message is NOT for you!]";
+        return "[This message is NOT for you!]"
     }
 }
-
-
-
 function descCode(element) {
     while (element) {
         if (element.tagName && element.tagName.toLowerCase() === 'code') {
-            return true;
+            return true
         }
-        element = element.parentElement;
+        element = element.parentElement
     }
-    return false;
+    return false
 }
-
 function updateElementWithDiff(oldEl, newHtml) {
-  // parse new html into a temp container
-  const temp = document.createElement('div');
-  temp.innerHTML = newHtml;
-
-  // recursive function to diff and update nodes
-  function diffUpdate(oldNode, newNode) {
-    // if nodes are different types, replace entire node
-    if (oldNode.nodeType !== newNode.nodeType || oldNode.nodeName !== newNode.nodeName) {
-      oldNode.replaceWith(newNode.cloneNode(true));
-      return;
-    }
-
-    // if text node and content differs, update text
-    if (oldNode.nodeType === Node.TEXT_NODE) {
-      if (oldNode.textContent !== newNode.textContent) {
-        oldNode.textContent = newNode.textContent;
-      }
-      return;
-    }
-
-    // for element nodes, update attributes
-    if (oldNode.nodeType === Node.ELEMENT_NODE) {
-      // update attributes
-      const oldAttrs = oldNode.attributes;
-      const newAttrs = newNode.attributes;
-
-      // set new and changed attributes
-      for (const attr of newAttrs) {
-        if (oldNode.getAttribute(attr.name) !== attr.value) {
-          oldNode.setAttribute(attr.name, attr.value);
+    const temp = document.createElement('div');
+    temp.innerHTML = newHtml;
+    function diffUpdate(oldNode, newNode) {
+        if (oldNode.nodeType !== newNode.nodeType || oldNode.nodeName !== newNode.nodeName) {
+            oldNode.replaceWith(newNode.cloneNode(true));
+            return
         }
-      }
-
-      // remove old attributes no longer present
-      for (const attr of oldAttrs) {
-        if (!newNode.hasAttribute(attr.name)) {
-          oldNode.removeAttribute(attr.name);
+        if (oldNode.nodeType === Node.TEXT_NODE) {
+            if (oldNode.textContent !== newNode.textContent) {
+                oldNode.textContent = newNode.textContent
+            }
+            return
         }
-      }
-
-      // diff children
-      const oldChildren = oldNode.childNodes;
-      const newChildren = newNode.childNodes;
-
-      const maxLen = Math.max(oldChildren.length, newChildren.length);
-      for (let i = 0; i < maxLen; i++) {
-        const oldChild = oldChildren[i];
-        const newChild = newChildren[i];
-        if (oldChild && newChild) {
-          diffUpdate(oldChild, newChild);
-        } else if (newChild && !oldChild) {
-          oldNode.appendChild(newChild.cloneNode(true));
-        } else if (oldChild && !newChild) {
-          oldNode.removeChild(oldChild);
+        if (oldNode.nodeType === Node.ELEMENT_NODE) {
+            const oldAttrs = oldNode.attributes;
+            const newAttrs = newNode.attributes;
+            for (const attr of newAttrs) {
+                if (oldNode.getAttribute(attr.name) !== attr.value) {
+                    oldNode.setAttribute(attr.name, attr.value)
+                }
+            }
+            for (const attr of oldAttrs) {
+                if (!newNode.hasAttribute(attr.name)) {
+                    oldNode.removeAttribute(attr.name)
+                }
+            }
+            const oldChildren = oldNode.childNodes;
+            const newChildren = newNode.childNodes;
+            const maxLen = Math.max(oldChildren.length, newChildren.length);
+            for (let i = 0; i < maxLen; i += 1) {
+                const oldChild = oldChildren[i];
+                const newChild = newChildren[i];
+                if (oldChild && newChild) {
+                    diffUpdate(oldChild, newChild)
+                } else if (newChild && !oldChild) {
+                    oldNode.appendChild(newChild.cloneNode(true))
+                } else if (oldChild && !newChild) {
+                    oldNode.removeChild(oldChild)
+                }
+            }
         }
-      }
     }
-  }
-
-  diffUpdate(oldEl, temp);
+    diffUpdate(oldEl, temp)
 }
 function setupMFP(element) {
-  const $ = unsafeWindow.jQuery;
-  const imgs = $(element).find('img');
-
-  const items = imgs.map((_, img) => ({
-    src: img.src,
-  })).get();
-
-  imgs.each(function(i) {
-    $(this).on('click', function(e) {
-      e.preventDefault();
-      $.magnificPopup.open({
-        items,
-        gallery: { enabled: true },
-        type: 'image',
-        mainClass: 'mfp-with-zoom',
-        closeOnContentClick: true,
-        image: {
-          verticalFit: true,
-        },
-        index: i,
-      });
-    });
-  });
+    const $ = unsafeWindow.jQuery;
+    const imgs = $(element).find('img');
+    const items = imgs.map((_, img) => ({src: img.src})).get();
+    imgs.each(function (i) {
+        $(this)
+            .on('click', function (e) {
+                e.preventDefault();
+                $
+                    .magnificPopup
+                    .open({
+                        items,
+                        gallery: {
+                            enabled: true
+                        },
+                        type: 'image',
+                        mainClass: 'mfp-with-zoom',
+                        closeOnContentClick: true,
+                        image: {
+                            verticalFit: true
+                        },
+                        index: i
+                    })
+            })
+    })
 }
-
-
 function gText(element) {
-    const avoid = /<*>/
+    const avoid = /<*>/;
     const regex = /!\{(.*?)\}/gs;
     const matches = [];
     const input = element.innerHTML;
-    // Replace !{stuff} with an empty string and store the matches
     const cleanedText = input.replace(regex, (match, p1) => {
         var mna;
-        const ql = p1.split("</p>").join("").split("<p>").join("").split(/[\n ]+/);;
+        const ql = p1
+            .split("</p>")
+            .join("")
+            .split("<p>")
+            .join("")
+            .split(/[\n ]+/);;
         const cmd = ql[0];
         const arg = ql[1];
         console.log(cmd);
-        const argt = ql.slice(2).join(" ");
+        const argt = ql
+            .slice(2)
+            .join(" ");
         switch (cmd) {
             case "phantom":
                 mna = "";
@@ -242,62 +228,58 @@ function gText(element) {
                 break;
             case "pm":
                 try {
-                    var username = document.querySelector("img.avatar").src.split("/")[6];
-                    var argspl = arg.split("|:|")
-                    var arg1 = decodeObfuscated(argspl[0], username)
-                    var arg2 = decodeObfuscated(argspl[1], username)
+                    var username = document
+                        .querySelector("img.avatar")
+                        .src
+                        .split("/")[6];
+                    var argspl = arg.split("|:|");
+                    var arg1 = decodeObfuscated(argspl[0], username);
+                    var arg2 = decodeObfuscated(argspl[1], username);
                     if (arg1 == "[This message is NOT for you!]" && arg2 == "[This message is NOT for you!]") {
                         mna = `<blockquote>[This message is NOT for you!]</blockquote>`;
-                        break;
+                        break
+                    } else if (arg1 == "[This message is NOT for you!]") {
+                        mna = `<blockquote>${arg2}</blockquote>`;
+                        break
                     }
-                    else if (arg1 == "[This message is NOT for you!]") {
-                        mna = `<blockquote>${arg2}</blockquote>`
-                        break;
-                    }
-                    mna = `<blockquote>${arg1}</blockquote>`;
+                    mna = `<blockquote>${arg1}</blockquote>`
                 } catch {
                     mna = `<blockquote>Incorrectly formatted message</blockquote>`
-                }
+                };
                 break;
             case "html":
-                mna = `<iframe srcdoc="${arg} ${argt}"></iframe>`
+                mna = `<iframe srcdoc="${arg} ${argt}"></iframe>`;
                 break;
             case "emoji":
                 if (argt != "") {
-                    mna = `<i class="fa-${argt} fa-${arg}"></i>`;
+                    mna = `<i class="fa-${argt} fa-${arg}"></i>`
                 } else {
-                    mna = `<i class="fa-solid fa-${arg}"></i>`;
+                    mna = `<i class="fa-solid fa-${arg}"></i>`
                 }
                 break;
             default:
-                mna = "<span style='color:red; background-color:yellow; padding:1px; margin:1px; border: 1px solid red; '>Invalid Discourse Extras Tag!</span>";
-                break;
-
+                mna = "<span style='color:red; background-color:yellow; padding:1px; margin:1px; border" +
+                        ": 1px solid red; '>Invalid Discourse Extras Tag!</span>";
+                break
         }
-        return mna; // Remove the matched pattern
+        return mna;
     });
-
-    return cleanedText.trim();
+    return cleanedText.trim()
 }
-
-
-// Function to process .cooked elements
 function processCookedElement(element, iscooked = false) {
-    // call gText() and update element
     const result = gText(element);
     updateElementWithDiff(element, result);
     setupMFP(element);
-    if (iscooked) {element.classList.add("cooked")}
-
+    element
+        .classList
+        .add("cooked");
     const fpo = element.parentElement;
     if (iscooked && !fpo.classList.contains("small-action-custom-message")) {
-        // Check if button already exists — prevent duplicates
         const place = fpo.querySelector(".actions");
         if (!place.querySelector(".dextra-md")) {
             var button = document.createElement("button");
             button.innerHTML = rawbuttonhtml;
             button.classList = "btn no-text btn-icon btn-flat dextra-md";
-
             button.onclick = function () {
                 const postId = Number(fpo.parentElement.parentElement.parentElement.getAttribute('data-post-id'));
                 var dialog = document.createElement("div");
@@ -329,32 +311,37 @@ function processCookedElement(element, iscooked = false) {
                     </div>
                     <div class="d-modal__backdrop"></div>
                 </div>`;
-
-                    dialog.querySelector(".dextra-lolzies").onclick = () => dialog.remove();
-                    dialog.querySelector(".dextra-hehe").onclick = () => dialog.remove();
-
-                    place.appendChild(dialog);
-                });
+                    dialog
+                        .querySelector(".dextra-lolzies")
+                        .onclick = () => dialog.remove();
+                    dialog
+                        .querySelector(".dextra-hehe")
+                        .onclick = () => dialog.remove();
+                    place.appendChild(dialog)
+                })
             };
-
             var editbutton = place.querySelector(".post-action-menu__show-more");
-            place.insertBefore(button, editbutton);
+            place.insertBefore(button, editbutton)
         }
     }
 }
 setInterval(() => {
-    document.querySelectorAll(".cooked").forEach(element => {
-        processCookedElement(element, true);
-    })
-    document.querySelectorAll(".chat-message-text").forEach(element => {
-        processCookedElement(element, false);
-    })
-    document.querySelectorAll(".d-editor-preview").forEach(element => {
-        processCookedElement(element, false);
-    })
-}, 800)
-
-
+    document
+        .querySelectorAll(".cooked")
+        .forEach(element => {
+            processCookedElement(element, true)
+        });
+    document
+        .querySelectorAll(".chat-message-text")
+        .forEach(element => {
+            processCookedElement(element, false)
+        });
+    document
+        .querySelectorAll(".d-editor-preview")
+        .forEach(element => {
+            processCookedElement(element, false)
+        })
+}, 800);
 function doit() {
     var droot = document.querySelector(".discourse-root");
     var html = `<div class="modal-container">
@@ -431,30 +418,46 @@ function doit() {
       </div>
 
         <div class="d-modal__backdrop"></div>
-    </div>`
+    </div>`;
     var ele = document.createElement("div");
     var key = "";
     ele.innerHTML = html;
-    ele.querySelector(".dextra-lesgo").onclick = function () {
+    ele
+        .querySelector(".dextra-lesgo")
+        .onclick = function () {
         if (document.querySelector(".dextra-yay").value == "") {
-            alert("gib me text")
-            return;
+            alert("gib me text");
+            return
         }
-        var val = document.querySelector(".dextra-yay").value;
+        var val = document
+            .querySelector(".dextra-yay")
+            .value;
         if (document.querySelector(".dextra-useryay").value == "") {
-            key = "discourse";
+            key = "discourse"
         } else {
-            key = document.querySelector(".dextra-useryay").value;
+            key = document
+                .querySelector(".dextra-useryay")
+                .value
         }
-        var username = document.querySelector("img.avatar").src.split("/")[6];
+        var username = document
+            .querySelector("img.avatar")
+            .src
+            .split("/")[6];
         GM_setClipboard("!{pm " + encodeObfuscated("dextrapm" + val, key) + "|:|" + encodeObfuscated("dextrapm" + val, username) + "}");
-        ele.remove();
-    }
-    ele.querySelector(".dextra-hailnah").onclick = function () { ele.remove() }
-    ele.querySelector(".dextra-hailnah2").onclick = function () { ele.remove() }
-    droot.appendChild(ele);
+        ele.remove()
+    };
+    ele
+        .querySelector(".dextra-hailnah")
+        .onclick = function () {
+        ele.remove()
+    };
+    ele
+        .querySelector(".dextra-hailnah2")
+        .onclick = function () {
+        ele.remove()
+    };
+    droot.appendChild(ele)
 }
-
 setTimeout(function () {
     const bcode = `
           <a id="ember5" class="ember-view sidebar-section-link sidebar-row" title="All topics" data-link-name="dextra" href="javascript:void(0)">
@@ -465,37 +468,37 @@ setTimeout(function () {
               Encode Message
             </span>
 </a>
-`
+`;
     var ab = document.createElement("li");
-    ab.classList = "sidebar-section-link-wrapper"
+    ab.classList = "sidebar-section-link-wrapper";
     ab.innerHTML = bcode;
     ab.onclick = doit;
-    document.querySelector("#sidebar-section-content-community").appendChild(ab);
-    document.querySelectorAll('.cooked').forEach(processCookedElement);
-
-
+    document
+        .querySelector("#sidebar-section-content-community")
+        .appendChild(ab);
+    document
+        .querySelectorAll('.cooked')
+        .forEach(processCookedElement);
     const spamRegex = /This is the spam/i;
-
     const btn = document.createElement('div');
     btn.innerHTML = `<a id="ember5" class="ember-view sidebar-section-link sidebar-row" title="All topics" data-link-name="dextra" href="javascript:void(0)"><span class="sidebar-section-link-prefix icon"><svg class="fa d-icon svg-icon svg-string" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><use href="#flag"></use></svg></span><span class="sidebar-section-link-content-text">Flag Spam Posts</span></a>`;
-    btn.style.width="100%";
+    btn.style.width = "100%";
     btn.onclick = () => {
         const posts = document.querySelectorAll('.topic-post');
         const spamPosts = [];
-
         posts.forEach(post => {
             const cooked = post.querySelector('.cooked');
-            if (!cooked) return;
+            if (!cooked) {
+                return
+            }
             if (spamRegex.test(cooked.innerText || "")) {
-                spamPosts.push(post);
+                spamPosts.push(post)
             }
         });
-
         if (spamPosts.length === 0) {
-  // Remove existing modal if any
-  document.querySelector(".dextra-flagspam-modal")?.remove();
-
-  const emptyModalHTML = `
+            document.querySelector(".dextra-flagspam-modal")
+                ?.remove();
+            const emptyModalHTML = `
   <div class="modal-container dextra-flagspam-modal">
     <div class="modal d-modal create-invite-modal" aria-modal="true" role="dialog">
       <div class="d-modal__container">
@@ -522,21 +525,19 @@ setTimeout(function () {
     <div class="d-modal__backdrop"></div>
   </div>
   `;
-
-  const droot = document.querySelector(".discourse-root") || document.body;
-  droot.insertAdjacentHTML("beforeend", emptyModalHTML);
-
-  document.querySelector(".dextra-hailnah").onclick =
-  document.querySelector(".dextra-hailnah2").onclick = () => {
-    document.querySelector(".dextra-flagspam-modal")?.remove();
-  };
-
-  return;
-}
-
-
-        // Create modal HTML
-const modalHTML = `
+            const droot = document.querySelector(".discourse-root") || document.body;
+            droot.insertAdjacentHTML("beforeend", emptyModalHTML);
+            document
+                .querySelector(".dextra-hailnah")
+                .onclick = document
+                .querySelector(".dextra-hailnah2")
+                .onclick = () => {
+                document.querySelector(".dextra-flagspam-modal")
+                    ?.remove()
+            };
+            return
+        }
+        const modalHTML = `
 <div class="modal-container dextra-flagspam-modal">
   <div class="modal d-modal create-invite-modal" data-keyboard="false" aria-modal="true" role="dialog" aria-labelledby="discourse-modal-title">
     <div class="d-modal__container">
@@ -567,55 +568,56 @@ const modalHTML = `
   <div class="d-modal__backdrop"></div>
 </div>
 `;
-
-// Remove existing modal if any
-document.querySelector(".dextra-flagspam-modal")?.remove();
-
-// Append modal to document
-const droot = document.querySelector(".discourse-root") || document.body;
-droot.insertAdjacentHTML("beforeend", modalHTML);
-
-// Modal logic
-document.querySelector(".dextra-lesgo").onclick = () => {
-  window.postMessage({ action: "flagConfirmed" }, "*");
-  document.querySelector(".dextra-flagspam-modal")?.remove();
-};
-
-document.querySelector(".dextra-hailnah").onclick = () => {
-  window.postMessage({ action: "flagCancelled" }, "*");
-  document.querySelector(".dextra-flagspam-modal")?.remove();
-};
-
-document.querySelector(".dextra-hailnah2").onclick = () => {
-  document.querySelector(".dextra-flagspam-modal")?.remove();
-};
-
-
+        document.querySelector(".dextra-flagspam-modal")
+            ?.remove();
+        const droot = document.querySelector(".discourse-root") || document.body;
+        droot.insertAdjacentHTML("beforeend", modalHTML);
+        document
+            .querySelector(".dextra-lesgo")
+            .onclick = () => {
+            window.postMessage({
+                action: "flagConfirmed"
+            }, "*");
+            document.querySelector(".dextra-flagspam-modal")
+                ?.remove()
+        };
+        document
+            .querySelector(".dextra-hailnah")
+            .onclick = () => {
+            window.postMessage({
+                action: "flagCancelled"
+            }, "*");
+            document.querySelector(".dextra-flagspam-modal")
+                ?.remove()
+        };
+        document
+            .querySelector(".dextra-hailnah2")
+            .onclick = () => {
+            document.querySelector(".dextra-flagspam-modal")
+                ?.remove()
+        };
         function cleanStyles() {
             spamPosts.forEach(post => {
                 const cooked = post.querySelector('.cooked');
                 if (cooked) {
                     cooked.style.border = "";
                     cooked.style.padding = "";
-                    cooked.style.borderRadius = "";
+                    cooked.style.borderRadius = ""
                 }
-            });
+            })
         }
-
         async function flagPostById(postId) {
             try {
-                const csrfToken = document.querySelector("meta[name='csrf-token']")?.content;
+                const csrfToken = document.querySelector("meta[name='csrf-token']")
+                    ?.content;
                 if (!csrfToken) {
                     console.error("CSRF token not found.");
-                    return;
+                    return
                 }
-
                 const formData = new URLSearchParams();
                 formData.append("id", postId);
                 formData.append("post_action_type_id", "8");
                 formData.append("flag_topic", "false");
-                //formData.append("message", "Flagged as spam by script.");
-
                 const response = await fetch("/post_actions", {
                     method: "POST",
                     headers: {
@@ -626,32 +628,28 @@ document.querySelector(".dextra-hailnah2").onclick = () => {
                     credentials: "same-origin",
                     body: formData.toString()
                 });
-
                 if (!response.ok) {
-                    throw new Error(`Failed to flag post ${postId}: ${response.statusText}`);
+                    throw new Error(`Failed to flag post ${postId}: ${response.statusText}`)
                 }
-
                 const data = await response.json();
-                console.log("Flagged post", postId, data);
+                console.log("Flagged post", postId, data)
             } catch (err) {
-                console.error("Flag error:", err);
+                console.error("Flag error:", err)
             }
         }
-
         function onMessage(event) {
-            if (!event.data || !event.data.action) return;
-
+            if (!event.data || !event.data.action) {
+                return
+            }
             if (event.data.action === 'flagConfirmed') {
-                const postIds = spamPosts
-                    .map(p => p.querySelector('article[data-post-id]')?.dataset.postId)
-                    .filter(Boolean);
-
-                (async () => {
+                const postIds = spamPosts.map(p => p.querySelector('article[data-post-id]')
+                    ?.dataset.postId).filter(Boolean);
+                (async() => {
                     for (const pid of postIds) {
-                        await flagPostById(pid);
+                        await flagPostById(pid)
                     }
                     cleanStyles();
-                      const confiredModalHTML = `
+                    const confiredModalHTML = `
   <div class="modal-container dextra-flagspam-modal">
     <div class="modal d-modal create-invite-modal" aria-modal="true" role="dialog">
       <div class="d-modal__container">
@@ -678,26 +676,26 @@ document.querySelector(".dextra-hailnah2").onclick = () => {
     <div class="d-modal__backdrop"></div>
   </div>
   `;
-                                    // Append modal to document
-const droot = document.querySelector(".discourse-root") || document.body;
-droot.insertAdjacentHTML("beforeend", confiredModalHTML);
-
-// Modal logic
-document.querySelector(".dextra-nonono").onclick = () => {
-  document.querySelector(".dextra-flagspam-modal")?.remove();
-};
-
-document.querySelector(".dextra-nonohailnah").onclick = () => {
-  document.querySelector(".dextra-flagspam-modal")?.remove();
-};
-
+                    const droot = document.querySelector(".discourse-root") || document.body;
+                    droot.insertAdjacentHTML("beforeend", confiredModalHTML);
+                    document
+                        .querySelector(".dextra-nonono")
+                        .onclick = () => {
+                        document.querySelector(".dextra-flagspam-modal")
+                            ?.remove()
+                    };
+                    document
+                        .querySelector(".dextra-nonohailnah")
+                        .onclick = () => {
+                        document.querySelector(".dextra-flagspam-modal")
+                            ?.remove()
+                    }
                 })();
-       window.removeEventListener('message', onMessage);
+                window.removeEventListener('message', onMessage)
             }
-
             if (event.data.action === 'flagCancelled') {
                 cleanStyles();
-                      const nonModalHTML = `
+                const nonModalHTML = `
   <div class="modal-container dextra-flagspam-modal">
     <div class="modal d-modal create-invite-modal" aria-modal="true" role="dialog">
       <div class="d-modal__container">
@@ -724,35 +722,32 @@ document.querySelector(".dextra-nonohailnah").onclick = () => {
     <div class="d-modal__backdrop"></div>
   </div>
   `;
-                                    // Append modal to document
-const droot = document.querySelector(".discourse-root") || document.body;
-droot.insertAdjacentHTML("beforeend", nonModalHTML);
-
-// Modal logic
-document.querySelector(".dextra-nonono").onclick = () => {
-  document.querySelector(".dextra-flagspam-modal")?.remove();
-};
-
-document.querySelector(".dextra-nonohailnah").onclick = () => {
-  document.querySelector(".dextra-flagspam-modal")?.remove();
-};
-                window.removeEventListener('message', onMessage);
+                const droot = document.querySelector(".discourse-root") || document.body;
+                droot.insertAdjacentHTML("beforeend", nonModalHTML);
+                document
+                    .querySelector(".dextra-nonono")
+                    .onclick = () => {
+                    document.querySelector(".dextra-flagspam-modal")
+                        ?.remove()
+                };
+                document
+                    .querySelector(".dextra-nonohailnah")
+                    .onclick = () => {
+                    document.querySelector(".dextra-flagspam-modal")
+                        ?.remove()
+                };
+                window.removeEventListener('message', onMessage)
             }
         }
-
-        window.addEventListener('message', onMessage);
+        window.addEventListener('message', onMessage)
     };
-
-    // Add the button to the sidebar
     const sidebar = document.querySelector('#sidebar-section-content-community');
     if (sidebar) {
         const wrapper = document.createElement('li');
         wrapper.className = "sidebar-section-link-wrapper";
         wrapper.appendChild(btn);
-        sidebar.appendChild(wrapper);
+        sidebar.appendChild(wrapper)
     } else {
-        console.warn("Sidebar not found, cannot insert Flag Spam button.");
+        console.warn("Sidebar not found, cannot insert Flag Spam button.")
     }
-
 }, 1000);
-
