@@ -1,16 +1,22 @@
 // ==UserScript==
 // @name         Discourse Extras
 // @namespace    devcat
-// @version      2.5
+// @version      2.6
 // @description  More for viewing, less for writing.
 // @author       Devcat Studios
 // @match        https://x-camp.discourse.group/*
 // @icon         https://d3bpeqsaub0i6y.cloudfront.net/user_avatar/meta.discourse.org/discourse/48/148734_2.png
-// @grant       GM_setClipboard
-// @grant       unsafeWindow
+// @grant        GM_setClipboard
+// @grant        GM_addStyle
+// @grant        unsafeWindow
 // @downloadURL  https://github.com/ethandacat/flask-hello-world/raw/refs/heads/main/api/world/d-extra/d-extra.user.js
 // @updateURL    https://github.com/ethandacat/flask-hello-world/raw/refs/heads/main/api/world/d-extra/d-extra.user.js
 // ==/UserScript==
+GM_addStyle(`
+  .mfp-bg {
+    background: rgba(0, 0, 0, 0.8) !important;
+  }
+`);
 
 var script = document.createElement("script");
 script.src = "https://kit.fontawesome.com/fcc6f02ae0.js";
@@ -103,6 +109,95 @@ function descCode(element) {
     return false;
 }
 
+function updateElementWithDiff(oldEl, newHtml) {
+  // parse new html into a temp container
+  const temp = document.createElement('div');
+  temp.innerHTML = newHtml;
+
+  // recursive function to diff and update nodes
+  function diffUpdate(oldNode, newNode) {
+    // if nodes are different types, replace entire node
+    if (oldNode.nodeType !== newNode.nodeType || oldNode.nodeName !== newNode.nodeName) {
+      oldNode.replaceWith(newNode.cloneNode(true));
+      return;
+    }
+
+    // if text node and content differs, update text
+    if (oldNode.nodeType === Node.TEXT_NODE) {
+      if (oldNode.textContent !== newNode.textContent) {
+        oldNode.textContent = newNode.textContent;
+      }
+      return;
+    }
+
+    // for element nodes, update attributes
+    if (oldNode.nodeType === Node.ELEMENT_NODE) {
+      // update attributes
+      const oldAttrs = oldNode.attributes;
+      const newAttrs = newNode.attributes;
+
+      // set new and changed attributes
+      for (const attr of newAttrs) {
+        if (oldNode.getAttribute(attr.name) !== attr.value) {
+          oldNode.setAttribute(attr.name, attr.value);
+        }
+      }
+
+      // remove old attributes no longer present
+      for (const attr of oldAttrs) {
+        if (!newNode.hasAttribute(attr.name)) {
+          oldNode.removeAttribute(attr.name);
+        }
+      }
+
+      // diff children
+      const oldChildren = oldNode.childNodes;
+      const newChildren = newNode.childNodes;
+
+      const maxLen = Math.max(oldChildren.length, newChildren.length);
+      for (let i = 0; i < maxLen; i++) {
+        const oldChild = oldChildren[i];
+        const newChild = newChildren[i];
+        if (oldChild && newChild) {
+          diffUpdate(oldChild, newChild);
+        } else if (newChild && !oldChild) {
+          oldNode.appendChild(newChild.cloneNode(true));
+        } else if (oldChild && !newChild) {
+          oldNode.removeChild(oldChild);
+        }
+      }
+    }
+  }
+
+  diffUpdate(oldEl, temp);
+}
+function setupMFP(element) {
+  const $ = unsafeWindow.jQuery;
+  const imgs = $(element).find('img');
+
+  const items = imgs.map((_, img) => ({
+    src: img.src,
+  })).get();
+
+  imgs.each(function(i) {
+    $(this).on('click', function(e) {
+      e.preventDefault();
+      $.magnificPopup.open({
+        items,
+        gallery: { enabled: true },
+        type: 'image',
+        mainClass: 'mfp-with-zoom',
+        closeOnContentClick: true,
+        image: {
+          verticalFit: true,
+        },
+        index: i,
+      });
+    });
+  });
+}
+
+
 function gText(element) {
     const avoid = /<*>/
     const regex = /!\{(.*?)\}/gs;
@@ -185,15 +280,19 @@ function gText(element) {
     return cleanedText.trim();
 }
 
+
 // Function to process .cooked elements
 function processCookedElement(element, iscooked = false) {
     // call gText() and update element
     const result = gText(element);
-    element.innerHTML = result;
+    updateElementWithDiff(element, result);
+    setupMFP(element);
+    if (iscooked) {element.classList.add("cooked")}
+
     const fpo = element.parentElement;
-    if (iscooked) {
+    if (iscooked && !fpo.classList.contains("small-action-custom-message")) {
         // Check if button already exists — prevent duplicates
-        const place = fpo.querySelector(".post-menu-area .post-controls .actions");
+        const place = fpo.querySelector(".actions");
         if (!place.querySelector(".dextra-md")) {
             var button = document.createElement("button");
             button.innerHTML = rawbuttonhtml;
@@ -389,9 +488,6 @@ setTimeout(function () {
             if (!cooked) return;
             if (spamRegex.test(cooked.innerText || "")) {
                 spamPosts.push(post);
-                cooked.style.border = "2px solid red";
-                cooked.style.padding = "5px";
-                cooked.style.borderRadius = "4px";
             }
         });
 
@@ -455,7 +551,7 @@ const modalHTML = `
           <span aria-hidden="true"></span>
         </button>
       </div>
-      <div class="d-modal__body" tabindex="-1">
+      <div class="d-modal__body dextra-bodymodal" tabindex="-1">
         <p>Found ${spamPosts.length} spam posts. Is this okay?</p>
       </div>
       <div class="d-modal__footer">
@@ -555,15 +651,91 @@ document.querySelector(".dextra-hailnah2").onclick = () => {
                         await flagPostById(pid);
                     }
                     cleanStyles();
-                    alert("Flagged all spam posts.");
-                })();
+                      const confiredModalHTML = `
+  <div class="modal-container dextra-flagspam-modal">
+    <div class="modal d-modal create-invite-modal" aria-modal="true" role="dialog">
+      <div class="d-modal__container">
+        <div class="d-modal__header">
+          <div class="d-modal__title">
+            <h1 class="d-modal__title-text">Flag Spam Posts</h1>
+          </div>
+          <button class="btn no-text btn-icon btn-transparent modal-close dextra-nonohailnah" title="close" type="button">
+            <svg class="fa d-icon d-icon-xmark svg-icon svg-string" xmlns="http://www.w3.org/2000/svg">
+              <use href="#xmark"></use>
+            </svg>
+          </button>
+        </div>
+        <div class="d-modal__body">
+          <p>Flagged all posts!</p>
+        </div>
+        <div class="d-modal__footer">
+          <button class="btn btn-text btn-primary dextra-nonono" type="button">
+            <span class="d-button-label">Nice</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="d-modal__backdrop"></div>
+  </div>
+  `;
+                                    // Append modal to document
+const droot = document.querySelector(".discourse-root") || document.body;
+droot.insertAdjacentHTML("beforeend", confiredModalHTML);
 
-                window.removeEventListener('message', onMessage);
+// Modal logic
+document.querySelector(".dextra-nonono").onclick = () => {
+  document.querySelector(".dextra-flagspam-modal")?.remove();
+};
+
+document.querySelector(".dextra-nonohailnah").onclick = () => {
+  document.querySelector(".dextra-flagspam-modal")?.remove();
+};
+
+                })();
+       window.removeEventListener('message', onMessage);
             }
 
             if (event.data.action === 'flagCancelled') {
                 cleanStyles();
-                alert("Cancelled flagging.");
+                      const nonModalHTML = `
+  <div class="modal-container dextra-flagspam-modal">
+    <div class="modal d-modal create-invite-modal" aria-modal="true" role="dialog">
+      <div class="d-modal__container">
+        <div class="d-modal__header">
+          <div class="d-modal__title">
+            <h1 class="d-modal__title-text">Flag Spam Posts</h1>
+          </div>
+          <button class="btn no-text btn-icon btn-transparent modal-close dextra-nonohailnah" title="close" type="button">
+            <svg class="fa d-icon d-icon-xmark svg-icon svg-string" xmlns="http://www.w3.org/2000/svg">
+              <use href="#xmark"></use>
+            </svg>
+          </button>
+        </div>
+        <div class="d-modal__body">
+          <p>Cancelled flagging</p>
+        </div>
+        <div class="d-modal__footer">
+          <button class="btn btn-text btn-primary dextra-nonono" type="button">
+            <span class="d-button-label">Nice</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="d-modal__backdrop"></div>
+  </div>
+  `;
+                                    // Append modal to document
+const droot = document.querySelector(".discourse-root") || document.body;
+droot.insertAdjacentHTML("beforeend", nonModalHTML);
+
+// Modal logic
+document.querySelector(".dextra-nonono").onclick = () => {
+  document.querySelector(".dextra-flagspam-modal")?.remove();
+};
+
+document.querySelector(".dextra-nonohailnah").onclick = () => {
+  document.querySelector(".dextra-flagspam-modal")?.remove();
+};
                 window.removeEventListener('message', onMessage);
             }
         }
