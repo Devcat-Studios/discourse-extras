@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Discourse Extras
 // @namespace    devcat
-// @version      2.5
+// @version      2.6
 // @description  More for viewing, less for writing.
 // @author       Devcat Studios
 // @match        https://x-camp.discourse.group/*
