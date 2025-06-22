@@ -39,6 +39,7 @@ function showUpdateToast(latestVersion, scriptURL) {
   document.body.appendChild(toast);
   toast.querySelector('#toastUpdateBtn').onclick = () => {
     window.location.href = scriptURL;
+    toast.remove();
   };
   toast.querySelector('#toastUpdateBtnNoThanks').onclick = () => {
     toast.remove();
