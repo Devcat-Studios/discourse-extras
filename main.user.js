@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Discourse Extras
 // @namespace    devcat
-// @version      3.0
+// @version      3.1
 // @description  More for viewing, less for writing.
 // @author       Devcat Studios
 // @match        https://x-camp.discourse.group/*
@@ -9,9 +9,178 @@
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
 // @grant        unsafeWindow
-// @downloadURL  https://github.com/ethandacat/flask-hello-world/raw/refs/heads/main/api/world/d-extra/d-extra.user.js
-// @updateURL    https://github.com/ethandacat/flask-hello-world/raw/refs/heads/main/api/world/d-extra/d-extra.user.js
+// @grant        GM_info
 // ==/UserScript==
+
+function isNewer(latest, current) {
+  const lv = latest.split('.').map(Number);
+  const cv = current.split('.').map(Number);
+  for (let i = 0; i < Math.max(lv.length, cv.length); i++) {
+    if ((lv[i] || 0) > (cv[i] || 0)) return true;
+    if ((lv[i] || 0) < (cv[i] || 0)) return false;
+  }
+  return false;
+}
+
+function showUpdateToast(latestVersion, scriptURL) {
+  const toast = document.createElement('div');
+  toast.innerHTML = `
+    <div style="
+      position:fixed; bottom:20px; right:20px;
+      padding:12px 18px;
+      border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.3);
+      font-size:14px; z-index:9999;
+    ">
+      <b>Update available:</b> v${latestVersion}
+      <button id="toastUpdateBtn" style="margin-left:10px;" class="btn btn-primary">Install</button>
+      <button id="toastUpdateBtnNoThanks" style="margin-left:10px;" class="btn btn-default">No thanks</button>
+    </div>
+  `;
+  document.body.appendChild(toast);
+  toast.querySelector('#toastUpdateBtn').onclick = () => {
+    window.location.href = scriptURL;
+  };
+  toast.querySelector('#toastUpdateBtnNoThanks').onclick = () => {
+    toast.remove();
+  };
+}
+
+function checkForUserScriptUpdate(scriptURL, currentVersion, onUpdateFound) {
+  fetch(scriptURL, { cache: 'no-store' })
+    .then(res => res.text())
+    .then(text => {
+      const match = text.match(/@version\s+([0-9a-zA-Z.+-]+)/);
+      if (!match) return;
+      const latestVersion = match[1];
+      if (isNewer(latestVersion, currentVersion)) {
+        onUpdateFound(latestVersion, scriptURL);
+      }
+    })
+    .catch(err => {
+      console.warn('Update check failed:', err);
+    });
+}
+
+// usage
+checkForUserScriptUpdate(
+  'https://raw.githubusercontent.com/Devcat-Studios/discourse-extras/main/main.user.js',
+  typeof GM_info !== 'undefined' ? GM_info.script.version : '0.0.0',
+  showUpdateToast
+);
+
+
+function getTitles(users) {
+  return fetch('https://ethan-codes.com/discourse-extras-theme/titles/?users=' + encodeURIComponent(users.join(',')))
+    .then(res => res.json());
+}
+function setTitle(username, title) {
+  return fetch('https://ethan-codes.com/discourse-extras-theme/titles/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, title })
+  }).then(res => res.json());
+}
+function deleteTitle(username) {
+  return fetch('https://ethan-codes.com/discourse-extras-theme/titles/', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username })
+  }).then(res => res.json());
+}
+
+let iDid = false;
+function titleStuff() {
+  if (window.location.href.includes("/u/") && window.location.href.endsWith("/preferences/account") && !iDid) {
+    iDid = true;
+    var combobox = document.querySelector(".select-kit.single-select.combobox.combo-box").parentElement;
+    combobox.innerHTML = `
+      <input placeholder="" maxlength="255" class="ember-text-field input-xxlarge ember-view" type="text" id="dextra-title-input">
+    `;
+    var username = getTextBetweenDashes(document.querySelector(".avatar").src);
+
+    getTitles([username]).then(titles => {
+      combobox.querySelector("#dextra-title-input").value = titles[username] || "";
+      var savebutton = document.querySelector(".save-changes");
+      savebutton.onclick = function() {
+          setTitle(username, combobox.querySelector("#dextra-title-input").value);
+      }
+    }).catch(err => {
+      console.error("Failed to get titles:", err);
+    });
+  }else{
+      if (!(window.location.href.includes("/u/") && window.location.href.endsWith("/preferences/account"))) {
+          iDid = false;
+      }
+  }
+}
+
+
+const titleCache = {};
+const pendingUsernames = new Set();
+const usernameToElements = new Map();
+let batchTimeout = null;
+
+function applyTitle(el) {
+  const names = el.parentElement.parentElement.querySelector(".names.trigger-user-card");
+  if (!names) return;
+
+  let usernameEl = names.querySelector(".second") || names.querySelector(".first");
+  if (!usernameEl) return;
+
+  const username = usernameEl.textContent.trim();
+  if (!username) return;
+
+  let titleEl = names.querySelector(".user-title");
+  if (!titleEl) {
+    titleEl = document.createElement("span");
+    titleEl.className = "user-title";
+    names.appendChild(titleEl);
+  }
+
+  // if cached, apply (even if empty string)
+  if (titleCache.hasOwnProperty(username)) {
+    if (titleCache[username]) titleEl.textContent = titleCache[username];
+    return;
+  }
+
+  // map username -> elements (can be multiple)
+  if (!usernameToElements.has(username)) {
+    usernameToElements.set(username, []);
+  }
+  usernameToElements.get(username).push(titleEl);
+
+  // add username to pending batch set
+  pendingUsernames.add(username);
+
+  // debounce batch fetch
+  if (!batchTimeout) {
+    batchTimeout = setTimeout(() => {
+      const usersToFetch = Array.from(pendingUsernames);
+      pendingUsernames.clear();
+      batchTimeout = null;
+
+      getTitles(usersToFetch).then(titles => {
+        usersToFetch.forEach(user => {
+          const newTitle = titles[user] || "";
+          const elements = usernameToElements.get(user) || [];
+
+          if (newTitle) {
+            titleCache[user] = newTitle;
+            elements.forEach(el => {
+              el.textContent = newTitle;
+            });
+          } else {
+            titleCache[user] = ""; // cache the blank title so we don't refetch
+            // don't overwrite existing el.textContent
+          }
+
+          usernameToElements.delete(user);
+        });
+      });
+    }, 50);
+  }
+}
+
 
 function LStorage(key, defaultValue) {
     let stored = localStorage.getItem(key);
@@ -207,7 +376,7 @@ function openMarketplace() {
             box.style.border = "1px solid #ccc";
             box.style.margin = "10px 0";
             box.style.padding = "10px";
-            box.style.background = "#fff";
+            box.style.background = "var(--secondary);";
             box.style.borderRadius = "6px";
             box.innerHTML = `
         <div><b>${script.name || "Unnamed Theme"}</b> <i style="color:var(--primary-high);">${script.id}</i></div>
@@ -226,6 +395,7 @@ function openMarketplace() {
                             SetStorage(key, val)
                         });
                     applyTheme()
+                    location.reload();
                 } else {
                     console.log(script)
                 }
@@ -267,6 +437,13 @@ function getTextBetweenDashes(url) {
         ? parts[6]
         : null;
 }
+function hexToRgbString(hex) {
+  hex = hex.replace(/^#/, '');
+  if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+  const num = parseInt(hex, 16);
+  return [(num >> 16) & 255, (num >> 8) & 255, num & 255].join(',');
+}
+
 function applyTheme() {
     document
         .documentElement
@@ -291,7 +468,7 @@ function applyTheme() {
     document
         .documentElement
         .style
-        .setProperty('--secondary-rgb', LStorage("sBG", "#ffffff"));
+        .setProperty('--secondary-rgb', hexToRgbString(LStorage("sBG", "#ffffff")));
     document
         .documentElement
         .style
@@ -311,7 +488,7 @@ function applyTheme() {
     document
         .documentElement
         .style
-        .setProperty('--tertiary-med-or-tertiary', LStorage("sAccent", "#0f0f0f"));
+        .setProperty('--tertiary-med-or-tertiary', LStorage("sAccentLow", "#0f0f0f"));
     document
         .documentElement
         .style
@@ -341,7 +518,7 @@ function addButtons() {
     panel.style.right = "10px";
     panel.style.zIndex = "999";
     panel.style.padding = "10px";
-    panel.style.background = "#fff";
+    panel.style.background = "var(--secondary)";
     panel.style.border = "1px solid #aaa";
     panel.style.borderRadius = "8px";
     panel.style.boxShadow = "0 0 8px rgba(0,0,0,0.2)";
@@ -370,7 +547,6 @@ function addButtons() {
     pickerBox.style.gap = "8px";
     pickerBox.style.marginTop = "10px";
     pickerBox.style.padding = "5px";
-    pickerBox.style.background = "#f0f0f0";
     pickerBox.style.border = "1px solid #ccc";
     pickerBox.style.borderRadius = "8px";
     Object
@@ -622,25 +798,26 @@ function setupMFP(element) {
             })
     })
 }
-function gText(element) {
-    const avoid = /<*>/;
-    const regex = /!\{(.*?)\}/gs;
-    const matches = [];
-    const input = element.innerHTML;
-    const cleanedText = input.replace(regex, (match, p1) => {
-        var mna;
+function parseDiscourseExtras(text) {
+    const regex = /!\{((?:\\\}|[^}])*)\}/gs;
+    let lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let match;
+
+    while ((match = regex.exec(text)) !== null) {
+        const before = text.slice(lastIndex, match.index);
+        if (before) frag.appendChild(document.createTextNode(before));
+
+        const p1 = match[1];
         const ql = p1
-            .split("</p>")
-            .join("")
-            .split("<p>")
-            .join("")
-            .split(/[\n ]+/);;
+            .split("</p>").join("")
+            .split("<p>").join("")
+            .split(/[\n ]+/);
         const cmd = ql[0];
         const arg = ql[1];
-        console.log(cmd);
-        const argt = ql
-            .slice(2)
-            .join(" ");
+        const argt = ql.slice(2).join(" ");
+        let mna = "";
+
         switch (cmd) {
             case "phantom":
                 mna = "";
@@ -655,7 +832,7 @@ function gText(element) {
                 mna = `<span style="${arg} ${argt}">`;
                 break;
             case "s":
-                mna = "</span>";
+                mna = `</span>`;
                 break;
             case "size":
                 mna = `<span style="font-size:${arg}px;">`;
@@ -663,112 +840,133 @@ function gText(element) {
             case "codepen":
                 mna = `<iframe src="https://cdpn.io/${arg}/fullpage/${argt}?view=" frameborder="0" width="90%" height="600px" style="clip-path: inset(120px 0 0 0); margin-top: -120px;"></iframe>`;
                 break;
-            case "embed":
-                var pw = `${arg} ${argt}`.replace("<a href=\"", "");
+            case "embed": {
+                const pw = `${arg} ${argt}`.replace("<a href=\"", "");
                 mna = `<iframe rel="" style="width:900px;height:600px;" src="${pw}" frameborder="0"></iframe>`;
                 break;
+            }
             case "mention":
                 mna = `<a class='mention'>${arg} ${argt}</a>`;
                 break;
             case "pm":
                 try {
-                    var username = document
-                        .querySelector("img.avatar")
-                        .src
-                        .split("/")[6];
-                    var argspl = arg.split("|:|");
-                    var arg1 = decodeObfuscated(argspl[0], username);
-                    var arg2 = decodeObfuscated(argspl[1], username);
-                    if (arg1 == "[This message is NOT for you!]" && arg2 == "[This message is NOT for you!]") {
-                        mna = `<blockquote>[This message is NOT for you!]</blockquote>`;
-                        break
-                    } else if (arg1 == "[This message is NOT for you!]") {
+                    const username = document.querySelector("img.avatar").src.split("/")[6];
+                    const argspl = arg.split("|:|");
+                    const arg1 = decodeObfuscated(argspl[0], username);
+                    const arg2 = decodeObfuscated(argspl[1], username);
+                    if (arg1 === "[This message is NOT for you!]" && arg2 === "[This message is NOT for you!]") {
+                        mna = `<blockquote>${arg1}</blockquote>`;
+                    } else if (arg1 === "[This message is NOT for you!]") {
                         mna = `<blockquote>${arg2}</blockquote>`;
-                        break
+                    } else {
+                        mna = `<blockquote>${arg1}</blockquote>`;
                     }
-                    mna = `<blockquote>${arg1}</blockquote>`
                 } catch {
-                    mna = `<blockquote>Incorrectly formatted message</blockquote>`
-                };
-                break;
-            case "html":
-                mna = `<iframe srcdoc="${arg} ${argt}"></iframe>`;
-                break;
-            case "emoji":
-                if (argt != "") {
-                    mna = `<i class="fa-${argt} fa-${arg}"></i>`
-                } else {
-                    mna = `<i class="fa-solid fa-${arg}"></i>`
+                    mna = `<blockquote>Incorrectly formatted message</blockquote>`;
                 }
                 break;
+            case "html": {
+                const htmlContent = p1.slice(cmd.length).trim();
+                const safeContent = htmlContent.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+                mna = `<iframe srcdoc='${safeContent}'></iframe>`;
+                break;
+            }
+            case "emoji":
+                mna = argt
+                    ? `<i class="fa-${argt} fa-${arg}"></i>`
+                    : `<i class="fa-solid fa-${arg}"></i>`;
+                break;
             default:
-                mna = "<span style='color:red; background-color:yellow; padding:1px; margin:1px; border" +
-                        ": 1px solid red; '>Invalid Discourse Extras Tag!</span>";
-                break
+                mna = `<span style='color:red; background-color:yellow; padding:1px; margin:1px; border: 1px solid red;'>Invalid Discourse Extras Tag!</span>`;
+                break;
         }
-        return mna
-    });
-    return cleanedText.trim()
+
+        const temp = document.createElement("div");
+        temp.innerHTML = mna;
+        for (const node of Array.from(temp.childNodes)) {
+            frag.appendChild(node);
+        }
+
+        lastIndex = regex.lastIndex;
+    }
+
+    const rest = text.slice(lastIndex);
+    if (rest) frag.appendChild(document.createTextNode(rest));
+
+    return frag;
 }
+
+function walkAndReplace(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+        if (node.textContent.includes("!{")) {
+            const frag = parseDiscourseExtras(node.textContent);
+            node.replaceWith(frag);
+        }
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+        for (const child of Array.from(node.childNodes)) {
+            walkAndReplace(child);
+        }
+    }
+}
+
 function processCookedElement(element, iscooked = false) {
-    const result = gText(element);
-    updateElementWithDiff(element, result);
+    walkAndReplace(element);
     setupMFP(element);
-    element
-        .classList
-        .add("cooked");
+    if (iscooked) applyTitle(element);
+    element.classList.add("cooked");
+
     const fpo = element.parentElement;
     if (iscooked && !fpo.classList.contains("small-action-custom-message")) {
         const place = fpo.querySelector(".actions");
         if (!place.querySelector(".dextra-md")) {
-            var button = document.createElement("button");
+            const button = document.createElement("button");
             button.innerHTML = rawbuttonhtml;
             button.classList = "btn no-text btn-icon btn-flat dextra-md";
             button.onclick = function () {
                 const postId = Number(fpo.parentElement.parentElement.parentElement.getAttribute('data-post-id'));
-                var dialog = document.createElement("div");
+                const dialog = document.createElement("div");
                 const place = document.querySelector(".discourse-root");
                 showRaw(postId).then(raw => {
                     const escaped = escapeHtml(raw);
                     dialog.innerHTML = `
-                <div class="modal-container">
-                    <div class="modal d-modal create-invite-modal" role="dialog" aria-modal="true" aria-labelledby="discourse-modal-title">
-                        <div class="d-modal__container">
-                            <div class="d-modal__header">
-                                <div class="d-modal__title">
-                                    <h1 id="discourse-modal-title" class="d-modal__title-text">Raw markdown content</h1>
-                                </div>
-                                <button class="btn no-text btn-icon btn-transparent modal-close dextra-hehe" title="close" type="button">
-                                    <svg class="fa d-icon d-icon-xmark svg-icon svg-string" xmlns="http://www.w3.org/2000/svg"><use href="#xmark"></use></svg>
-                                    <span aria-hidden="true"></span>
-                                </button>
-                            </div>
-                            <div class="d-modal__body" tabindex="-1">
-                                <p><pre><code class="hljs lang-markdown language-markdown">${escaped}</code></pre></p>
-                            </div>
-                            <div class="d-modal__footer">
-                                <button class="btn btn-text btn-primary dextra-lolzies" autofocus="true" type="button">
-                                    <span class="d-button-label">Close</span>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="d-modal__backdrop"></div>
-                </div>`;
-                    dialog
-                        .querySelector(".dextra-lolzies")
-                        .onclick = () => dialog.remove();
-                    dialog
-                        .querySelector(".dextra-hehe")
-                        .onclick = () => dialog.remove();
-                    place.appendChild(dialog)
-                })
+<div class="modal-container">
+  <div class="modal d-modal create-invite-modal" role="dialog" aria-modal="true" aria-labelledby="discourse-modal-title">
+    <div class="d-modal__container">
+      <div class="d-modal__header">
+        <div class="d-modal__title">
+          <h1 id="discourse-modal-title" class="d-modal__title-text">Raw markdown content</h1>
+        </div>
+        <button class="btn no-text btn-icon btn-transparent modal-close dextra-hehe" title="close" type="button">
+          <svg class="fa d-icon d-icon-xmark svg-icon svg-string" xmlns="http://www.w3.org/2000/svg"><use href="#xmark"></use></svg>
+        </button>
+      </div>
+      <div class="d-modal__body" tabindex="-1">
+        <p><pre><code class="hljs lang-markdown language-markdown">${escaped}</code></pre></p>
+      </div>
+      <div class="d-modal__footer">
+        <button class="btn btn-text btn-primary dextra-lolzies" autofocus="true" type="button">
+          <span class="d-button-label">Close</span>
+        </button>
+      </div>
+    </div>
+  </div>
+  <div class="d-modal__backdrop"></div>
+</div>`;
+                    dialog.querySelector(".dextra-lolzies").onclick = () => dialog.remove();
+                    dialog.querySelector(".dextra-hehe").onclick = () => dialog.remove();
+                    place.appendChild(dialog);
+                });
             };
-            var editbutton = place.querySelector(".post-action-menu__show-more");
-            place.insertBefore(button, editbutton)
+            const editbutton = place.querySelector(".post-action-menu__show-more");
+            place.insertBefore(button, editbutton);
         }
     }
+
+    try {
+        document.querySelector(".c-navbar-container").style.zIndex = "7";
+    } catch {}
 }
+
 setInterval(() => {
     document
         .querySelectorAll(".cooked")
@@ -785,6 +983,7 @@ setInterval(() => {
         .forEach(element => {
             processCookedElement(element, false)
         })
+    titleStuff();
 }, 800);
 function doit() {
     var droot = document.querySelector(".discourse-root");
@@ -902,7 +1101,20 @@ function doit() {
     };
     droot.appendChild(ele)
 }
-setTimeout(function () {
+async function waitForElement(selector, timeout = 5000) {
+  const start = Date.now();
+
+  while (true) {
+    const el = document.querySelector(selector);
+    if (el) return el;
+    if (Date.now() - start > timeout) throw new Error(`Timeout waiting for ${selector}`);
+
+    // wait a bit before checking again, so browser doesn’t freeze
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+
+waitForElement('#sidebar-section-content-community').then(elhasmentos => {
     SetStorage("sHighlight", "#ffffff");
     applyTheme();
     addButtons();
@@ -1198,4 +1410,6 @@ setTimeout(function () {
     } else {
         console.warn("Sidebar not found, cannot insert Flag Spam button.")
     }
-}, 1000);
+}).catch(err => {
+  console.error('not found:', err);
+});
