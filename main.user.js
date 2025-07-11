@@ -1,9 +1,48 @@
+/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ==========================================================
+/===Discourse Extras by ethandacat, with Devcat Studios.===\
+|==========================================================|
+|                                                          |
+|  Discourse Extras is a userscript designed for Discourse |
+|  to add more features to its already vast BBCode syntax. |
+|                                                          |
+|  ------------------------------------------------------- |
+|  Licensed under the CAT License.                         |
+|  Source code below for all to see, feel free to          |
+\  distribute and modify it!                               /
+ ==========================================================
+
+
+
+
+
+
+
+
+
+
+*/
+
 // ==UserScript==
 // @name         Discourse Extras
 // @namespace    devcat
-// @version      3.1
+// @version      4.0
+// @license      CAT License
 // @description  More for viewing, less for writing.
-// @author       Devcat Studios
+// @author       ethandacat (w/ Devcat Studios)
 // @match        https://x-camp.discourse.group/*
 // @icon         https://d3bpeqsaub0i6y.cloudfront.net/user_avatar/meta.discourse.org/discourse/48/148734_2.png
 // @grant        GM_setClipboard
@@ -12,19 +51,80 @@
 // @grant        GM_info
 // ==/UserScript==
 
+function startOnlineWidget(username) {
+    const mainOutlet = document.querySelector(".sidebar-sections");
+    const listControls = document.querySelector(".sidebar-custom-sections").nextSibling;
+    if (!mainOutlet || !listControls) return;
+
+    let container = document.getElementById('online-widget');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'online-widget';
+        Object.assign(container.style, {
+            padding: '10px',
+            borderRadius: "1em",
+            boxShadow: "0 0 8px rgba(0,0,0,.05)",
+            margin: '10px',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '6px',
+            alignItems: 'center'
+        });
+        container.textContent = 'Loading online users...';
+        mainOutlet.insertBefore(container, listControls);
+    } else {
+        container.style.display = '';
+        container.textContent = 'Loading online users...';
+    }
+
+    async function fetchOnlineUsers() {
+        try {
+            const res = await fetch('https://ethan-codes.com/discourse-extras-theme/online/online.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username }),
+            });
+            const data = await res.json();
+
+            if (data.length === 0) {
+                container.innerHTML = `<em>No members online.</em>`;
+            } else {
+                container.innerHTML = `<strong style="width: 100%">Online:</strong>`;
+                for (const name of data) {
+                    const avatar = document.createElement('div');
+                    avatar.setAttribute('role', 'button');
+                    avatar.className = 'user__avatar clickable';
+                    avatar.setAttribute('data-user-card', name);
+                    avatar.innerHTML = `
+            <img alt="" width="24" height="24"
+              src="https://sea2.discourse-cdn.com/flex020/user_avatar/x-camp.discourse.group/${name}/24/8925_2.png"
+              class="avatar" alt=${name}>`;
+                    container.appendChild(avatar);
+                }
+            }
+        } catch {
+            container.innerHTML = `<em>Error loading online users.</em>`;
+        }
+    }
+
+    fetchOnlineUsers();
+    setInterval(fetchOnlineUsers, 30000);
+}
+
+
 function isNewer(latest, current) {
-  const lv = latest.split('.').map(Number);
-  const cv = current.split('.').map(Number);
-  for (let i = 0; i < Math.max(lv.length, cv.length); i++) {
-    if ((lv[i] || 0) > (cv[i] || 0)) return true;
-    if ((lv[i] || 0) < (cv[i] || 0)) return false;
-  }
-  return false;
+    const lv = latest.split('.').map(Number);
+    const cv = current.split('.').map(Number);
+    for (let i = 0; i < Math.max(lv.length, cv.length); i++) {
+        if ((lv[i] || 0) > (cv[i] || 0)) return true;
+        if ((lv[i] || 0) < (cv[i] || 0)) return false;
+    }
+    return false;
 }
 
 function showUpdateToast(latestVersion, scriptURL) {
-  const toast = document.createElement('div');
-  toast.innerHTML = `
+    const toast = document.createElement('div');
+    toast.innerHTML = `
     <div style="
       position:fixed; bottom:20px; right:20px;
       padding:12px 18px;
@@ -36,83 +136,83 @@ function showUpdateToast(latestVersion, scriptURL) {
       <button id="toastUpdateBtnNoThanks" style="margin-left:10px;" class="btn btn-default">No thanks</button>
     </div>
   `;
-  document.body.appendChild(toast);
-  toast.querySelector('#toastUpdateBtn').onclick = () => {
-    window.location.href = scriptURL;
-    toast.remove();
-  };
-  toast.querySelector('#toastUpdateBtnNoThanks').onclick = () => {
-    toast.remove();
-  };
+    document.body.appendChild(toast);
+    toast.querySelector('#toastUpdateBtn').onclick = () => {
+        window.location.href = scriptURL;
+        toast.remove();
+    };
+    toast.querySelector('#toastUpdateBtnNoThanks').onclick = () => {
+        toast.remove();
+    };
 }
 
 function checkForUserScriptUpdate(scriptURL, currentVersion, onUpdateFound) {
-  fetch(scriptURL, { cache: 'no-store' })
-    .then(res => res.text())
-    .then(text => {
-      const match = text.match(/@version\s+([0-9a-zA-Z.+-]+)/);
-      if (!match) return;
-      const latestVersion = match[1];
-      if (isNewer(latestVersion, currentVersion)) {
-        onUpdateFound(latestVersion, scriptURL);
-      }
+    fetch(scriptURL, { cache: 'no-store' })
+        .then(res => res.text())
+        .then(text => {
+        const match = text.match(/@version\s+([0-9a-zA-Z.+-]+)/);
+        if (!match) return;
+        const latestVersion = match[1];
+        if (isNewer(latestVersion, currentVersion)) {
+            onUpdateFound(latestVersion, scriptURL);
+        }
     })
-    .catch(err => {
-      console.warn('Update check failed:', err);
+        .catch(err => {
+        console.warn('Update check failed:', err);
     });
 }
 
 // usage
 checkForUserScriptUpdate(
-  'https://raw.githubusercontent.com/Devcat-Studios/discourse-extras/main/main.user.js',
-  typeof GM_info !== 'undefined' ? GM_info.script.version : '0.0.0',
-  showUpdateToast
+    'https://raw.githubusercontent.com/Devcat-Studios/discourse-extras/main/main.user.js',
+    typeof GM_info !== 'undefined' ? GM_info.script.version : '0.0.0',
+    showUpdateToast
 );
 
 
 function getTitles(users) {
-  return fetch('https://ethan-codes.com/discourse-extras-theme/titles/?users=' + encodeURIComponent(users.join(',')))
-    .then(res => res.json());
+    return fetch('https://ethan-codes.com/discourse-extras-theme/titles/?users=' + encodeURIComponent(users.join(',')))
+        .then(res => res.json());
 }
 function setTitle(username, title) {
-  return fetch('https://ethan-codes.com/discourse-extras-theme/titles/', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, title })
-  }).then(res => res.json());
+    return fetch('https://ethan-codes.com/discourse-extras-theme/titles/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, title })
+    }).then(res => res.json());
 }
 function deleteTitle(username) {
-  return fetch('https://ethan-codes.com/discourse-extras-theme/titles/', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username })
-  }).then(res => res.json());
+    return fetch('https://ethan-codes.com/discourse-extras-theme/titles/', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username })
+    }).then(res => res.json());
 }
 
 let iDid = false;
 function titleStuff() {
-  if (window.location.href.includes("/u/") && window.location.href.endsWith("/preferences/account") && !iDid) {
-    iDid = true;
-    var combobox = document.querySelector(".select-kit.single-select.combobox.combo-box").parentElement;
-    combobox.innerHTML = `
+    if (window.location.href.includes("/u/") && window.location.href.endsWith("/preferences/account") && !iDid) {
+        iDid = true;
+        var combobox = document.querySelector(".select-kit.single-select.combobox.combo-box").parentElement;
+        combobox.innerHTML = `
       <input placeholder="" maxlength="255" class="ember-text-field input-xxlarge ember-view" type="text" id="dextra-title-input">
     `;
-    var username = getTextBetweenDashes(document.querySelector(".avatar").src);
+        var username = getTextBetweenDashes(document.querySelector(".avatar").src);
 
-    getTitles([username]).then(titles => {
-      combobox.querySelector("#dextra-title-input").value = titles[username] || "";
-      var savebutton = document.querySelector(".save-changes");
-      savebutton.onclick = function() {
-          setTitle(username, combobox.querySelector("#dextra-title-input").value);
-      }
-    }).catch(err => {
-      console.error("Failed to get titles:", err);
-    });
-  }else{
-      if (!(window.location.href.includes("/u/") && window.location.href.endsWith("/preferences/account"))) {
-          iDid = false;
-      }
-  }
+        getTitles([username]).then(titles => {
+            combobox.querySelector("#dextra-title-input").value = titles[username] || "";
+            var savebutton = document.querySelector(".save-changes");
+            savebutton.onclick = function() {
+                setTitle(username, combobox.querySelector("#dextra-title-input").value);
+            }
+        }).catch(err => {
+            console.error("Failed to get titles:", err);
+        });
+    }else{
+        if (!(window.location.href.includes("/u/") && window.location.href.endsWith("/preferences/account"))) {
+            iDid = false;
+        }
+    }
 }
 
 
@@ -122,64 +222,64 @@ const usernameToElements = new Map();
 let batchTimeout = null;
 
 function applyTitle(el) {
-  const names = el.parentElement.parentElement.querySelector(".names.trigger-user-card");
-  if (!names) return;
+    const names = el.parentElement.parentElement.querySelector(".names.trigger-user-card");
+    if (!names) return;
 
-  let usernameEl = names.querySelector(".second") || names.querySelector(".first");
-  if (!usernameEl) return;
+    let usernameEl = names.querySelector(".second") || names.querySelector(".first");
+    if (!usernameEl) return;
 
-  const username = usernameEl.textContent.trim();
-  if (!username) return;
+    const username = usernameEl.textContent.trim();
+    if (!username) return;
 
-  let titleEl = names.querySelector(".user-title");
-  if (!titleEl) {
-    titleEl = document.createElement("span");
-    titleEl.className = "user-title";
-    names.appendChild(titleEl);
-  }
+    let titleEl = names.querySelector(".user-title");
+    if (!titleEl) {
+        titleEl = document.createElement("span");
+        titleEl.className = "user-title";
+        names.appendChild(titleEl);
+    }
 
-  // if cached, apply (even if empty string)
-  if (titleCache.hasOwnProperty(username)) {
-    if (titleCache[username]) titleEl.textContent = titleCache[username];
-    return;
-  }
+    // if cached, apply (even if empty string)
+    if (titleCache.hasOwnProperty(username)) {
+        if (titleCache[username]) titleEl.textContent = titleCache[username];
+        return;
+    }
 
-  // map username -> elements (can be multiple)
-  if (!usernameToElements.has(username)) {
-    usernameToElements.set(username, []);
-  }
-  usernameToElements.get(username).push(titleEl);
+    // map username -> elements (can be multiple)
+    if (!usernameToElements.has(username)) {
+        usernameToElements.set(username, []);
+    }
+    usernameToElements.get(username).push(titleEl);
 
-  // add username to pending batch set
-  pendingUsernames.add(username);
+    // add username to pending batch set
+    pendingUsernames.add(username);
 
-  // debounce batch fetch
-  if (!batchTimeout) {
-    batchTimeout = setTimeout(() => {
-      const usersToFetch = Array.from(pendingUsernames);
-      pendingUsernames.clear();
-      batchTimeout = null;
+    // debounce batch fetch
+    if (!batchTimeout) {
+        batchTimeout = setTimeout(() => {
+            const usersToFetch = Array.from(pendingUsernames);
+            pendingUsernames.clear();
+            batchTimeout = null;
 
-      getTitles(usersToFetch).then(titles => {
-        usersToFetch.forEach(user => {
-          const newTitle = titles[user] || "";
-          const elements = usernameToElements.get(user) || [];
+            getTitles(usersToFetch).then(titles => {
+                usersToFetch.forEach(user => {
+                    const newTitle = titles[user] || "";
+                    const elements = usernameToElements.get(user) || [];
 
-          if (newTitle) {
-            titleCache[user] = newTitle;
-            elements.forEach(el => {
-              el.textContent = newTitle;
+                    if (newTitle) {
+                        titleCache[user] = newTitle;
+                        elements.forEach(el => {
+                            el.textContent = newTitle;
+                        });
+                    } else {
+                        titleCache[user] = ""; // cache the blank title so we don't refetch
+                        // don't overwrite existing el.textContent
+                    }
+
+                    usernameToElements.delete(user);
+                });
             });
-          } else {
-            titleCache[user] = ""; // cache the blank title so we don't refetch
-            // don't overwrite existing el.textContent
-          }
-
-          usernameToElements.delete(user);
-        });
-      });
-    }, 50);
-  }
+        }, 50);
+    }
 }
 
 
@@ -210,12 +310,12 @@ function clearTheme() {
     Object
         .keys(themeKeys)
         .forEach(key => {
-            const cssVar = keyToCSSVar(key);
-            document
-                .documentElement
-                .style
-                .removeProperty(cssVar)
-        });
+        const cssVar = keyToCSSVar(key);
+        document
+            .documentElement
+            .style
+            .removeProperty(cssVar)
+    });
     location.reload()
 }
 function keyToCSSVar(key) {
@@ -305,11 +405,11 @@ function getCurrentThemeObject() {
         container.appendChild(buttonsDiv);
         submitBtn.onclick = () => {
             const id = idInput
-                .value
-                .trim();
+            .value
+            .trim();
             const name = nameInput
-                .value
-                .trim();
+            .value
+            .trim();
             const description = describeInput.value;
             const user = getTextBetweenDashes(document.querySelector("img.avatar").src);
             if (!id || !name) {
@@ -320,8 +420,8 @@ function getCurrentThemeObject() {
             Object
                 .keys(themeKeys)
                 .forEach(key => {
-                    colors[key] = LStorage(key, themeKeys[key])
-                });
+                colors[key] = LStorage(key, themeKeys[key])
+            });
             document
                 .body
                 .removeChild(container);
@@ -334,21 +434,20 @@ function getCurrentThemeObject() {
     })
 }
 function openMarketplace() {
-    if (document.querySelector("#theme-marketplace-popup")) {
-        return
-    }
+    if (document.querySelector("#theme-marketplace-popup")) return;
+
     const mkplace = document.createElement("div");
     mkplace.id = "theme-marketplace-popup";
     mkplace.innerHTML = `
-    <header style="padding:20px; background-color:var(--primary); color:var(--secondary); display:flex;">
-      <i class="fa-solid fa-xmark close-mkplace" style="cursor:pointer;"></i>
-      <div style="margin:auto;">Theme Marketplace</div>
-    </header>
-    <div id="marketplace-content" style="padding:20px;"></div>
-    <footer style="padding:20px; border-top:1px solid #ccc; background:#f8f8f8; position:fixed; bottom:0; width:100%; display: flex;">
-      <button id="upload-current-theme" class="btn btn-primary">Upload Current Theme</button>
-    </footer>
-  `;
+        <header style="padding:20px; background-color:var(--primary); color:var(--secondary); display:flex;">
+          <i class="fa-solid fa-xmark close-mkplace" style="cursor:pointer;"></i>
+          <div style="margin:auto;">Theme Marketplace</div>
+        </header>
+        <div id="marketplace-content" style="padding:20px;"></div>
+        <footer style="padding:20px; border-top:1px solid #ccc; background:#f8f8f8; position:fixed; bottom:0; width:100%; display: flex;">
+          <button id="upload-current-theme" class="btn btn-primary">Upload Current Theme</button>
+        </footer>
+    `;
     Object.assign(mkplace.style, {
         zIndex: "1001",
         width: "100vw",
@@ -359,61 +458,90 @@ function openMarketplace() {
         backgroundColor: "var(--header_background)",
         overflowY: "auto"
     });
-    mkplace
-        .querySelector(".close-mkplace")
-        .onclick = () => mkplace.remove();
-    document
-        .body
-        .appendChild(mkplace);
+
+    const closeBtn = mkplace.querySelector(".close-mkplace");
+    document.body.appendChild(mkplace);
+
+    const content = mkplace.querySelector("#marketplace-content");
+    const container = document.createElement("div");
+    container.style.display = "flex";
+    container.style.flexWrap = "wrap";
+    container.style.gap = "10px";
+    container.style.justifyContent = "flex-start";
+    content.appendChild(container);
+
+    renderMarketplaceThemes(container);
+
+    let interval = setInterval(() => {
+        renderMarketplaceThemes(container);
+    }, 5000);
+
+    closeBtn.onclick = () => {
+        mkplace.remove();
+        clearInterval(interval);
+    };
+
+    mkplace.querySelector("#upload-current-theme").onclick = () => {
+        getCurrentThemeObject().then(themeObj =>
+                                     addScript(themeObj)
+                                     .then(() => alert("Theme uploaded!"))
+                                     .catch(console.error)
+                                    );
+    };
+}
+
+function renderMarketplaceThemes(container) {
     getScripts().then(scripts => {
-        const content = mkplace.querySelector("#marketplace-content");
         if (!Array.isArray(scripts)) {
-            content.innerHTML = "<p>Failed to load themes.</p>";
-            return
+            container.innerHTML = "<p>Failed to load themes.</p>";
+            return;
         }
+
+        container.innerHTML = ""; // Clear old content
         scripts.sort((a, b) => a.name.localeCompare(b.name));
+        const perLine = 5;
+        const gapPx = 10;
+
         scripts.forEach(script => {
             const box = document.createElement("div");
+            box.style.flex = `0 0 calc(${100 / perLine}% - ${(gapPx * (perLine - 1)) / perLine}px)`;
+            box.style.boxSizing = "border-box";
             box.style.border = "1px solid #ccc";
-            box.style.margin = "10px 0";
             box.style.padding = "10px";
-            box.style.background = "var(--secondary);";
             box.style.borderRadius = "6px";
+            box.style.background = "var(--secondary)";
+            box.style.minWidth = "0";
+
             box.innerHTML = `
-        <div><b>${script.name || "Unnamed Theme"}</b> <i style="color:var(--primary-high);">${script.id}</i></div>
-        <div><i style="color:var(--primary-high); font-size:.8em;">by <a class='mention'>@${script.user || "unknown"}</a></i></div>
-        <div style="margin: 5px 0; font-size:90%">${script.description || "No description"}</div>
-        <button style="margin-top:5px;" class="apply-theme btn btn-primary">Apply</button>
-      `;
-            box
-                .querySelector(".apply-theme")
-                .onclick = () => {
+                <div><b>${script.name || "Unnamed Theme"}</b> <i style="color:var(--primary-high);">${script.id}</i></div>
+                <div><i style="color:var(--primary-high); font-size:.8em;">by <a class='mention'>@${script.user || "unknown"}</a></i></div>
+                <div style="margin: 5px 0; font-size:90%">${script.description || "No description"}</div>
+                <button style="margin-top:5px;" class="apply-theme btn btn-primary">Apply</button>
+                ${getTextBetweenDashes(document.querySelector('img.avatar').src) === script.user ? `
+                  <button class="btn no-text btn-icon post-action-menu__delete delete btn-flat dextra_delete" title="delete this post" type="button">
+                    <svg class="fa d-icon d-icon-trash-can svg-icon svg-string" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+                      <use href="#trash-can"></use>
+                    </svg><span aria-hidden="true"></span></button>` : ''}
+            `;
+
+            box.querySelector(".apply-theme").onclick = () => {
                 if (script.colors) {
-                    Object
-                        .entries(script.colors)
-                        .forEach(([key, val]) => {
-                            console.log(key, val);
-                            SetStorage(key, val)
-                        });
-                    applyTheme()
+                    Object.entries(script.colors).forEach(([key, val]) => SetStorage(key, val));
+                    applyTheme();
                     location.reload();
                 } else {
-                    console.log(script)
+                    console.log(script);
                 }
             };
-            content.appendChild(box)
-        })
-    }).catch(err => {
-        const content = mkplace.querySelector("#marketplace-content");
-        content.innerHTML = "<p>Error loading themes.</p>";
-        console.error(err)
+
+            const delBtn = box.querySelector(".dextra_delete");
+            if (delBtn) delBtn.onclick = () => deleteScript(script.id);
+
+            container.appendChild(box);
+        });
     });
-    mkplace
-        .querySelector("#upload-current-theme")
-        .onclick = () => {
-        getCurrentThemeObject().then((themeObj) => addScript(themeObj).then(() => alert("Theme uploaded!")).catch(console.error))
-    }
 }
+
 const themeKeys = {
     sPrimary: "#222222",
     sPrimaryHigh: "rgb(100.3,100.3,100.3)",
@@ -428,21 +556,21 @@ const themeKeys = {
 function formatString(str) {
     let withoutS = str.slice(1);
     let result = withoutS
-        .replace(/([A-Z])(?=[a-z])/g, ' $1')
-        .trim();
+    .replace(/([A-Z])(?=[a-z])/g, ' $1')
+    .trim();
     return result
 }
 function getTextBetweenDashes(url) {
     let parts = url.split("/");
     return parts.length > 6
         ? parts[6]
-        : null;
+    : null;
 }
 function hexToRgbString(hex) {
-  hex = hex.replace(/^#/, '');
-  if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
-  const num = parseInt(hex, 16);
-  return [(num >> 16) & 255, (num >> 8) & 255, num & 255].join(',');
+    hex = hex.replace(/^#/, '');
+    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+    const num = parseInt(hex, 16);
+    return [(num >> 16) & 255, (num >> 8) & 255, num & 255].join(',');
 }
 
 function applyTheme() {
@@ -509,7 +637,7 @@ function applyTheme() {
     const logo = document.querySelector(".logo-big");
     if (logo) {
         logo.src = "https://us1.discourse-cdn.com/flex020/uploads/x_camp/original/1X/2cfa84d1826975a" +
-                "c3ea4973b91923be11dc36dd1.png"
+            "c3ea4973b91923be11dc36dd1.png"
     }
 }
 function addButtons() {
@@ -553,24 +681,24 @@ function addButtons() {
     Object
         .entries(themeKeys)
         .forEach(([key, def]) => {
-            const row = document.createElement("div");
-            row.style.display = "flex";
-            row.style.alignItems = "center";
-            row.style.gap = "8px";
-            const label = document.createElement("label");
-            label.textContent = formatString(key);
-            label.style.width = "130px";
-            const input = document.createElement("input");
-            input.type = "color";
-            input.value = LStorage(key, def);
-            input.addEventListener("input", () => {
-                SetStorage(key, input.value);
-                applyTheme()
-            });
-            row.appendChild(label);
-            row.appendChild(input);
-            pickerBox.appendChild(row)
+        const row = document.createElement("div");
+        row.style.display = "flex";
+        row.style.alignItems = "center";
+        row.style.gap = "8px";
+        const label = document.createElement("label");
+        label.textContent = formatString(key);
+        label.style.width = "130px";
+        const input = document.createElement("input");
+        input.type = "color";
+        input.value = LStorage(key, def);
+        input.addEventListener("input", () => {
+            SetStorage(key, input.value);
+            applyTheme()
         });
+        row.appendChild(label);
+        row.appendChild(input);
+        pickerBox.appendChild(row)
+    });
     panel.appendChild(pickerBox);
     document
         .body
@@ -627,6 +755,19 @@ async function addScript(scriptObj) {
             'Content-Type': 'application/json'
         },
         body: JSON.stringify(scriptObj)
+    });
+    if (!res.ok) {
+        throw new Error('Failed to add script')
+    }
+    return await res.json()
+}
+async function deleteScript(id) {
+    const res = await fetch(API_URL, {
+        method: 'DELETE',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: `{ "id": "${id}"}`
     });
     if (!res.ok) {
         throw new Error('Failed to add script')
@@ -694,12 +835,12 @@ function encodeObfuscated(str, key) {
 function decodeObfuscated(obfStr, key, triedFallback = false) {
     try {
         let cleaned = obfStr
-            .replace(/^XxH@/, "")
-            .replace(/@HxX$/, "");
+        .replace(/^XxH@/, "")
+        .replace(/@HxX$/, "");
         let reversed = cleaned
-            .split("")
-            .reverse()
-            .join("");
+        .split("")
+        .reverse()
+        .join("");
         let decodedStr = atob(reversed);
         let decodedBytes = new Uint8Array([...decodedStr].map(c => c.charCodeAt(0)));
         let keyBytes = new TextEncoder().encode(key);
@@ -773,134 +914,154 @@ function updateElementWithDiff(oldEl, newHtml) {
     }
     diffUpdate(oldEl, temp)
 }
-function setupMFP(element) {
-    const $ = unsafeWindow.jQuery;
-    const imgs = $(element).find('img');
-    const items = imgs.map((_, img) => ({src: img.src})).get();
-    imgs.each(function (i) {
-        $(this)
-            .on('click', function (e) {
-                e.preventDefault();
-                $
-                    .magnificPopup
-                    .open({
-                        items,
-                        gallery: {
-                            enabled: true
-                        },
-                        type: 'image',
-                        mainClass: 'mfp-with-zoom',
-                        closeOnContentClick: true,
-                        image: {
-                            verticalFit: true
-                        },
-                        index: i
-                    })
-            })
-    })
-}
-function parseDiscourseExtras(text) {
-    const regex = /!\{((?:\\\}|[^}])*)\}/gs;
-    let lastIndex = 0;
-    const frag = document.createDocumentFragment();
-    let match;
+function parseCustomBBCodeRecursive(text) {
+    const tagPattern = /\[([a-z]+)(?:=([^\]]+))?\]/i;
 
-    while ((match = regex.exec(text)) !== null) {
-        const before = text.slice(lastIndex, match.index);
-        if (before) frag.appendChild(document.createTextNode(before));
+    function parseSegment(segment) {
+        const frag = document.createDocumentFragment();
 
-        const p1 = match[1];
-        const ql = p1
-            .split("</p>").join("")
-            .split("<p>").join("")
-            .split(/[\n ]+/);
-        const cmd = ql[0];
-        const arg = ql[1];
-        const argt = ql.slice(2).join(" ");
-        let mna = "";
+        while (segment.length > 0) {
+            const openMatch = segment.match(tagPattern);
 
-        switch (cmd) {
-            case "phantom":
-                mna = "";
-                break;
-            case "bgc":
-                mna = `<span style="background-color:${arg}">`;
-                break;
-            case "color":
-                mna = `<span style="color:${arg}">`;
-                break;
-            case "style":
-                mna = `<span style="${arg} ${argt}">`;
-                break;
-            case "s":
-                mna = `</span>`;
-                break;
-            case "size":
-                mna = `<span style="font-size:${arg}px;">`;
-                break;
-            case "codepen":
-                mna = `<iframe src="https://cdpn.io/${arg}/fullpage/${argt}?view=" frameborder="0" width="90%" height="600px" style="clip-path: inset(120px 0 0 0); margin-top: -120px;"></iframe>`;
-                break;
-            case "embed": {
-                const pw = `${arg} ${argt}`.replace("<a href=\"", "");
-                mna = `<iframe rel="" style="width:900px;height:600px;" src="${pw}" frameborder="0"></iframe>`;
+            if (!openMatch) {
+                frag.appendChild(document.createTextNode(segment));
                 break;
             }
-            case "mention":
-                mna = `<a class='mention'>${arg} ${argt}</a>`;
-                break;
-            case "pm":
-                try {
-                    const username = document.querySelector("img.avatar").src.split("/")[6];
-                    const argspl = arg.split("|:|");
-                    const arg1 = decodeObfuscated(argspl[0], username);
-                    const arg2 = decodeObfuscated(argspl[1], username);
-                    if (arg1 === "[This message is NOT for you!]" && arg2 === "[This message is NOT for you!]") {
-                        mna = `<blockquote>${arg1}</blockquote>`;
-                    } else if (arg1 === "[This message is NOT for you!]") {
-                        mna = `<blockquote>${arg2}</blockquote>`;
-                    } else {
-                        mna = `<blockquote>${arg1}</blockquote>`;
-                    }
-                } catch {
-                    mna = `<blockquote>Incorrectly formatted message</blockquote>`;
+
+            const index = openMatch.index;
+            if (index > 0) {
+                frag.appendChild(document.createTextNode(segment.slice(0, index)));
+                segment = segment.slice(index);
+            }
+
+            const tag = openMatch[1].toLowerCase();
+            const param = openMatch[2] || "";
+
+            // find matching closing tag index accounting for nested tags
+            let searchIndex = openMatch[0].length;
+            let openCount = 1;
+
+            while (openCount > 0) {
+                const nextOpen = segment.indexOf(`[${tag}`, searchIndex);
+                const nextClose = segment.indexOf(`[/${tag}]`, searchIndex);
+
+                if (nextClose === -1) {
+                    frag.appendChild(document.createTextNode(segment));
+                    segment = "";
+                    return frag;
                 }
-                break;
-            case "html": {
-                const htmlContent = p1.slice(cmd.length).trim();
-                const safeContent = htmlContent.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
-                mna = `<iframe srcdoc='${safeContent}'></iframe>`;
-                break;
+
+                if (nextOpen !== -1 && nextOpen < nextClose) {
+                    openCount++;
+                    searchIndex = nextOpen + 1;
+                } else {
+                    openCount--;
+                    searchIndex = nextClose + tag.length + 3; // length of [/${tag}]
+                }
             }
-            case "emoji":
-                mna = argt
-                    ? `<i class="fa-${argt} fa-${arg}"></i>`
-                    : `<i class="fa-solid fa-${arg}"></i>`;
-                break;
-            default:
-                mna = `<span style='color:red; background-color:yellow; padding:1px; margin:1px; border: 1px solid red;'>Invalid Discourse Extras Tag!</span>`;
-                break;
+
+            const contentStart = openMatch[0].length;
+            const contentEnd = searchIndex - (`[/${tag}]`.length);
+            const innerContent = segment.slice(contentStart, contentEnd);
+
+            const innerFrag = parseSegment(innerContent);
+
+            let wrapper;
+
+            switch (tag) {
+                case "bgc":
+                    wrapper = document.createElement("span");
+                    wrapper.style.backgroundColor = param;
+                    wrapper.appendChild(innerFrag);
+                    break;
+                case "color":
+                    wrapper = document.createElement("span");
+                    wrapper.style.color = param;
+                    wrapper.appendChild(innerFrag);
+                    break;
+                case "style":
+                    wrapper = document.createElement("span");
+                    wrapper.style.cssText = param;
+                    wrapper.appendChild(innerFrag);
+                    break;
+                case "size":
+                    wrapper = document.createElement("span");
+                    wrapper.style.fontSize = param + "px";
+                    wrapper.appendChild(innerFrag);
+                    break;
+                case "mention":
+                    wrapper = document.createElement("a");
+                    wrapper.className = "mention";
+                    wrapper.textContent = param + " ";
+                    wrapper.appendChild(innerFrag);
+                    break;
+                case "pm":
+                    try {
+                        const username = document.querySelector("img.avatar").src.split("/")[6];
+                        const argspl = innerContent.split("|:|");
+                        const arg1 = decodeObfuscated(argspl[0], username);
+                        const arg2 = decodeObfuscated(argspl[1], username);
+                        let visible;
+                        if (arg1 === "[This message is NOT for you!]" && arg2 === "[This message is NOT for you!]") {
+                            visible = arg1;
+                        } else if (arg1 === "[This message is NOT for you!]") {
+                            visible = arg2;
+                        } else {
+                            visible = arg1;
+                        }
+                        wrapper = document.createElement("blockquote");
+                        wrapper.textContent = visible;
+                    } catch {
+                        wrapper = document.createElement("blockquote");
+                        wrapper.textContent = "Incorrectly formatted message";
+                    }
+                    break;
+                case "emoji":
+                    wrapper = document.createElement("i");
+                    wrapper.className = param ? `fa-${innerContent} fa-${param}` : `fa-solid fa-${innerContent}`;
+                    break;
+                case "codepen":
+                    wrapper = document.createElement("iframe");
+                    wrapper.src = `https://cdpn.io/${param}/fullpage/${innerContent}?view=`;
+                    wrapper.frameBorder = "0";
+                    wrapper.style.width = "90%";
+                    wrapper.style.height = "600px";
+                    wrapper.style.clipPath = "inset(120px 0 0 0)";
+                    wrapper.style.marginTop = "-120px";
+                    break;
+                case "embed":
+                    wrapper = document.createElement("iframe");
+                    wrapper.rel = "";
+                    wrapper.style.width = "900px";
+                    wrapper.style.height = "600px";
+                    wrapper.src = param;
+                    wrapper.frameBorder = "0";
+                    break;
+                default:
+                    wrapper = document.createElement("span");
+                    wrapper.style.color = "red";
+                    wrapper.style.backgroundColor = "yellow";
+                    wrapper.style.padding = "1px";
+                    wrapper.style.margin = "1px";
+                    wrapper.style.border = "1px solid red";
+                    wrapper.textContent = "Invalid Discourse Extras Tag!";
+                    break;
+            }
+
+            frag.appendChild(wrapper);
+            segment = segment.slice(searchIndex);
         }
 
-        const temp = document.createElement("div");
-        temp.innerHTML = mna;
-        for (const node of Array.from(temp.childNodes)) {
-            frag.appendChild(node);
-        }
-
-        lastIndex = regex.lastIndex;
+        return frag;
     }
 
-    const rest = text.slice(lastIndex);
-    if (rest) frag.appendChild(document.createTextNode(rest));
-
-    return frag;
+    return parseSegment(text);
 }
 
 function walkAndReplace(node) {
     if (node.nodeType === Node.TEXT_NODE) {
-        if (node.textContent.includes("!{")) {
-            const frag = parseDiscourseExtras(node.textContent);
+        if (node.textContent.includes("[")) {
+            const frag = parseCustomBBCodeRecursive(node.textContent);
             node.replaceWith(frag);
         }
     } else if (node.nodeType === Node.ELEMENT_NODE) {
@@ -910,9 +1071,9 @@ function walkAndReplace(node) {
     }
 }
 
+
 function processCookedElement(element, iscooked = false) {
     walkAndReplace(element);
-    setupMFP(element);
     if (iscooked) applyTitle(element);
     element.classList.add("cooked");
 
@@ -972,18 +1133,18 @@ setInterval(() => {
     document
         .querySelectorAll(".cooked")
         .forEach(element => {
-            processCookedElement(element, true)
-        });
+        processCookedElement(element, true)
+    });
     document
         .querySelectorAll(".chat-message-text")
         .forEach(element => {
-            processCookedElement(element, false)
-        });
+        processCookedElement(element, false)
+    });
     document
         .querySelectorAll(".d-editor-preview")
         .forEach(element => {
-            processCookedElement(element, false)
-        })
+        processCookedElement(element, false)
+    })
     titleStuff();
 }, 800);
 function doit() {
@@ -1074,8 +1235,8 @@ function doit() {
             return
         }
         var val = document
-            .querySelector(".dextra-yay")
-            .value;
+        .querySelector(".dextra-yay")
+        .value;
         if (document.querySelector(".dextra-useryay").value == "") {
             key = "discourse"
         } else {
@@ -1084,10 +1245,10 @@ function doit() {
                 .value
         }
         var username = document
-            .querySelector("img.avatar")
-            .src
-            .split("/")[6];
-        GM_setClipboard("!{pm " + encodeObfuscated("dextrapm" + val, key) + "|:|" + encodeObfuscated("dextrapm" + val, username) + "}");
+        .querySelector("img.avatar")
+        .src
+        .split("/")[6];
+        GM_setClipboard("[pm]" + encodeObfuscated("dextrapm" + val, key) + "|:|" + encodeObfuscated("dextrapm" + val, username) + "[/pm]");
         ele.remove()
     };
     ele
@@ -1103,19 +1264,20 @@ function doit() {
     droot.appendChild(ele)
 }
 async function waitForElement(selector, timeout = 5000) {
-  const start = Date.now();
+    const start = Date.now();
 
-  while (true) {
-    const el = document.querySelector(selector);
-    if (el) return el;
-    if (Date.now() - start > timeout) throw new Error(`Timeout waiting for ${selector}`);
+    while (true) {
+        const el = document.querySelector(selector);
+        if (el) return el;
+        if (Date.now() - start > timeout) throw new Error(`Timeout waiting for ${selector}`);
 
-    // wait a bit before checking again, so browser doesn’t freeze
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
+        // wait a bit before checking again, so browser doesn’t freeze
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
 }
 
 waitForElement('#sidebar-section-content-community').then(elhasmentos => {
+    startOnlineWidget(getTextBetweenDashes(document.querySelector("img.avatar").src))
     SetStorage("sHighlight", "#ffffff");
     applyTheme();
     addButtons();
@@ -1270,7 +1432,7 @@ waitForElement('#sidebar-section-content-community').then(elhasmentos => {
         async function flagPostById(postId) {
             try {
                 const csrfToken = document.querySelector("meta[name='csrf-token']")
-                    ?.content;
+                ?.content;
                 if (!csrfToken) {
                     console.error("CSRF token not found.");
                     return
@@ -1304,7 +1466,7 @@ waitForElement('#sidebar-section-content-community').then(elhasmentos => {
             }
             if (event.data.action === 'flagConfirmed') {
                 const postIds = spamPosts.map(p => p.querySelector('article[data-post-id]')
-                    ?.dataset.postId).filter(Boolean);
+                                              ?.dataset.postId).filter(Boolean);
                 (async() => {
                     for (const pid of postIds) {
                         await flagPostById(pid)
@@ -1412,5 +1574,5 @@ waitForElement('#sidebar-section-content-community').then(elhasmentos => {
         console.warn("Sidebar not found, cannot insert Flag Spam button.")
     }
 }).catch(err => {
-  console.error('not found:', err);
+    console.error('not found:', err);
 });
