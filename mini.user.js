@@ -1,3 +1,14 @@
+/*
+
+CAUTION: Before downloading this, you should remember this script is OUTDATED and NOT for the latest version!
+
+
+*/
+
+
+
+
+
 // ==UserScript==
 // @name         Discourse Extras Mini
 // @namespace    devcat
