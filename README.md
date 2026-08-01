@@ -1,4 +1,4 @@
-# Discourse Extras
+# Discourse Extras 5
 
 A userscript to extend Discourse post rendering with extra visual and secret-message features.  
 **More for viewing, less for writing.**
@@ -65,12 +65,28 @@ Only the target user can see the message. Others will get `[This message is NOT 
 
 ---
 
+## !{emoji palette} Theme Changer
+
+Open **"Theme Changer"** in the Discourse sidebar to customize your local theme:
+
+- Color pickers for primary/background/accent colors
+- **Logo URL** — replaces `#site-logo` with an image of your choice
+- **Background URL** — sets a custom page background image
+- **Export Theme (JSON)** — copies your current theme (colors + logo/background) to your clipboard as JSON
+- **Import Theme (JSON)** — paste JSON from someone else to apply their theme
+- **Clear Theme** — resets everything back to default
+
+Themes are stored locally and shared by copy/pasting JSON — there is no online theme marketplace.
+
+---
+
 ## !{emoji spinner} Technical Notes
 
 - Tags are processed using regex inside `.innerHTML` (with some injection sanitization).
 - MutationObserver handles dynamic posts/chats.
 - Uses XOR + reversed Base64 for encoding PMs.
 - Only handles elements within `.cooked` and `.chat-message-text`.
+- Legacy `!{tag ...}` syntax from pre-4.0 versions is still supported alongside the current `[tag=param]...[/tag]` syntax.
 
 ---
 

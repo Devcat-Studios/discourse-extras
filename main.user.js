@@ -39,7 +39,7 @@
 // ==UserScript==
 // @name         Discourse Extras
 // @namespace    devcat
-// @version      4.0
+// @version      5.0
 // @license      CAT License
 // @description  More for viewing, less for writing.
 // @author       ethandacat (w/ Devcat Studios)
@@ -49,68 +49,151 @@
 // @grant        GM_addStyle
 // @grant        unsafeWindow
 // @grant        GM_info
+// @run-at       document-start
 // ==/UserScript==
 
-function startOnlineWidget(username) {
-    const mainOutlet = document.querySelector(".sidebar-sections");
-    const listControls = document.querySelector(".sidebar-custom-sections").nextSibling;
-    if (!mainOutlet || !listControls) return;
-
-    let container = document.getElementById('online-widget');
-    if (!container) {
-        container = document.createElement('div');
-        container.id = 'online-widget';
-        Object.assign(container.style, {
-            padding: '10px',
-            borderRadius: "1em",
-            boxShadow: "0 0 8px rgba(0,0,0,.05)",
-            margin: '10px',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: '6px',
-            alignItems: 'center'
-        });
-        container.textContent = 'Loading online users...';
-        mainOutlet.insertBefore(container, listControls);
-    } else {
-        container.style.display = '';
-        container.textContent = 'Loading online users...';
-    }
-
-    async function fetchOnlineUsers() {
+// AntiCrash: patch both fetch AND XMLHttpRequest as early as possible (document-start)
+// so we see post JSON before Discourse's own Ember app gets a chance to render it.
+// Live replies don't arrive via a plain fetch('/posts/...') — Discourse pushes them
+// over its message-bus long-polling channel, a totally different payload shape
+// (an array of {channel, data: {...}} messages) that may go over XHR instead of
+// fetch. So instead of matching specific URLs/shapes, dextraDeepSanitizeCooked()
+// walks the whole parsed JSON tree and neutralizes any "cooked" field it finds,
+// no matter how deeply nested or which endpoint it came from.
+// unsafeWindow is used because Discourse's own code calls fetch/XHR on the real
+// page window, not this script's sandboxed one.
+(function () {
+    const win = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+    if (win.__dextraFetchPatched) return;
+    win.__dextraFetchPatched = true;
+    const originalFetch = win.fetch.bind(win);
+    win.__dextraOriginalFetch = originalFetch;
+    win.fetch = async function (...args) {
+        const response = await originalFetch(...args);
         try {
-            const res = await fetch('https://ethan-codes.com/discourse-extras-theme/online/online.php', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username }),
-            });
-            const data = await res.json();
-
-            if (data.length === 0) {
-                container.innerHTML = `<em>No members online.</em>`;
-            } else {
-                container.innerHTML = `<strong style="width: 100%">Online:</strong>`;
-                for (const name of data) {
-                    const avatar = document.createElement('div');
-                    avatar.setAttribute('role', 'button');
-                    avatar.className = 'user__avatar clickable';
-                    avatar.setAttribute('data-user-card', name);
-                    avatar.innerHTML = `
-            <img alt="" width="24" height="24"
-              src="https://sea2.discourse-cdn.com/flex020/user_avatar/x-camp.discourse.group/${name}/24/8925_2.png"
-              class="avatar" alt=${name}>`;
-                    container.appendChild(avatar);
+            const contentType = response.headers.get("content-type") || "";
+            if (contentType.includes("json")) {
+                const data = await response.clone().json();
+                if (dextraDeepSanitizeCooked(data)) {
+                    return new Response(JSON.stringify(data), {
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: response.headers
+                    });
                 }
             }
-        } catch {
-            container.innerHTML = `<em>Error loading online users.</em>`;
+        } catch (e) {}
+        return response;
+    };
+
+    if (win.__dextraXHRPatched) return;
+    win.__dextraXHRPatched = true;
+    const OrigXHR = win.XMLHttpRequest;
+    const origSend = OrigXHR.prototype.send;
+    OrigXHR.prototype.send = function (...args) {
+        this.addEventListener("load", function () {
+            try {
+                const contentType = this.getResponseHeader("content-type") || "";
+                if (!contentType.includes("json")) return;
+                const data = JSON.parse(this.responseText);
+                if (dextraDeepSanitizeCooked(data)) {
+                    const sanitizedText = JSON.stringify(data);
+                    Object.defineProperty(this, "responseText", {get: () => sanitizedText, configurable: true});
+                    Object.defineProperty(this, "response", {get: () => sanitizedText, configurable: true});
+                }
+            } catch (e) {}
+        });
+        return origSend.apply(this, args);
+    };
+
+    // A direct/refreshed load of a topic page never calls fetch/XHR for that
+    // topic's data at all — Discourse embeds it straight into the initial HTML as
+    // <script id="data-preloaded"> and Ember reads it via PreloadStore on boot.
+    // That's the gap that made AntiCrash look inconsistent: SPA navigation to a
+    // topic went through the patched fetch/XHR above and got caught; landing on
+    // (or refreshing) that same topic directly did not. Catch it here too, before
+    // Ember ever gets to read the tag.
+    if (win.__dextraPreloadPatched) return;
+    win.__dextraPreloadPatched = true;
+    function dextraSanitizePreloadTag(tag) {
+        if (!tag || tag.dataset.dextraPreloadScanned) return;
+        tag.dataset.dextraPreloadScanned = "true";
+        try {
+            const store = JSON.parse(tag.textContent);
+            let changed = false;
+            for (const key in store) {
+                try {
+                    const inner = JSON.parse(store[key]);
+                    if (dextraDeepSanitizeCooked(inner)) {
+                        store[key] = JSON.stringify(inner);
+                        changed = true;
+                    }
+                } catch (e) {}
+            }
+            if (changed) tag.textContent = JSON.stringify(store);
+        } catch (e) {}
+    }
+    const existingTag = document.getElementById("data-preloaded");
+    if (existingTag) dextraSanitizePreloadTag(existingTag);
+    const preloadObserver = new MutationObserver(() => {
+        const tag = document.getElementById("data-preloaded");
+        if (tag) {
+            dextraSanitizePreloadTag(tag);
+            preloadObserver.disconnect();
+        }
+    });
+    preloadObserver.observe(document.documentElement, {childList: true, subtree: true});
+})();
+function dextraShieldHtml(postId, risk) {
+    return `<details class="alert alert-error dextra-anticrash-shield" data-dextra-post-id="${postId}">
+      <summary>&#9888;&#65039; Held back by AntiCrash &mdash; ${risk.reason}</summary>
+      <p>${risk.detail} Blocked before it ever reached the page, so nothing rendered yet.</p>
+      <button class="btn btn-default btn-small dextra-anticrash-net-show" type="button" data-post-id="${postId}">Show anyway</button>
+    </details>`;
+}
+function dextraDeepSanitizeCooked(node, seen) {
+    seen = seen || new Set();
+    if (!node || typeof node !== "object" || seen.has(node)) return false;
+    seen.add(node);
+    let changed = false;
+    if (Array.isArray(node)) {
+        for (const item of node) {
+            if (dextraDeepSanitizeCooked(item, seen)) changed = true;
+        }
+        return changed;
+    }
+    if (typeof node.cooked === "string") {
+        const risk = dextraAntiCrashRisk(node.cooked);
+        if (risk) {
+            node.cooked = dextraShieldHtml(node.id, risk);
+            changed = true;
         }
     }
-
-    fetchOnlineUsers();
-    setInterval(fetchOnlineUsers, 30000);
+    for (const key in node) {
+        if (key === "cooked") continue;
+        const val = node[key];
+        if (val && typeof val === "object") {
+            if (dextraDeepSanitizeCooked(val, seen)) changed = true;
+        }
+    }
+    return changed;
 }
-
+document.addEventListener("click", function (e) {
+    const btn = e.target.closest(".dextra-anticrash-net-show");
+    if (!btn) return;
+    const postId = btn.dataset.postId;
+    const win = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+    const originalFetch = win.__dextraOriginalFetch || fetch;
+    originalFetch(`/posts/${postId}.json`).then(r => r.json()).then(post => {
+        const shield = btn.closest(".dextra-anticrash-shield");
+        const cookedEl = shield ? shield.closest(".cooked") : null;
+        if (cookedEl && post.cooked) {
+            cookedEl.dataset.dextraAnticrashApproved = "true";
+            cookedEl.innerHTML = post.cooked;
+            processCookedElement(cookedEl, true);
+        }
+    });
+});
 
 function isNewer(latest, current) {
     const lv = latest.split('.').map(Number);
@@ -169,120 +252,6 @@ checkForUserScriptUpdate(
     showUpdateToast
 );
 
-
-function getTitles(users) {
-    return fetch('https://ethan-codes.com/discourse-extras-theme/titles/?users=' + encodeURIComponent(users.join(',')))
-        .then(res => res.json());
-}
-function setTitle(username, title) {
-    return fetch('https://ethan-codes.com/discourse-extras-theme/titles/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, title })
-    }).then(res => res.json());
-}
-function deleteTitle(username) {
-    return fetch('https://ethan-codes.com/discourse-extras-theme/titles/', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username })
-    }).then(res => res.json());
-}
-
-let iDid = false;
-function titleStuff() {
-    if (window.location.href.includes("/u/") && window.location.href.endsWith("/preferences/account") && !iDid) {
-        iDid = true;
-        var combobox = document.querySelector(".select-kit.single-select.combobox.combo-box").parentElement;
-        combobox.innerHTML = `
-      <input placeholder="" maxlength="255" class="ember-text-field input-xxlarge ember-view" type="text" id="dextra-title-input">
-    `;
-        var username = getTextBetweenDashes(document.querySelector(".avatar").src);
-
-        getTitles([username]).then(titles => {
-            combobox.querySelector("#dextra-title-input").value = titles[username] || "";
-            var savebutton = document.querySelector(".save-changes");
-            savebutton.onclick = function() {
-                setTitle(username, combobox.querySelector("#dextra-title-input").value);
-            }
-        }).catch(err => {
-            console.error("Failed to get titles:", err);
-        });
-    }else{
-        if (!(window.location.href.includes("/u/") && window.location.href.endsWith("/preferences/account"))) {
-            iDid = false;
-        }
-    }
-}
-
-
-const titleCache = {};
-const pendingUsernames = new Set();
-const usernameToElements = new Map();
-let batchTimeout = null;
-
-function applyTitle(el) {
-    const names = el.parentElement.parentElement.querySelector(".names.trigger-user-card");
-    if (!names) return;
-
-    let usernameEl = names.querySelector(".second") || names.querySelector(".first");
-    if (!usernameEl) return;
-
-    const username = usernameEl.textContent.trim();
-    if (!username) return;
-
-    let titleEl = names.querySelector(".user-title");
-    if (!titleEl) {
-        titleEl = document.createElement("span");
-        titleEl.className = "user-title";
-        names.appendChild(titleEl);
-    }
-
-    // if cached, apply (even if empty string)
-    if (titleCache.hasOwnProperty(username)) {
-        if (titleCache[username]) titleEl.textContent = titleCache[username];
-        return;
-    }
-
-    // map username -> elements (can be multiple)
-    if (!usernameToElements.has(username)) {
-        usernameToElements.set(username, []);
-    }
-    usernameToElements.get(username).push(titleEl);
-
-    // add username to pending batch set
-    pendingUsernames.add(username);
-
-    // debounce batch fetch
-    if (!batchTimeout) {
-        batchTimeout = setTimeout(() => {
-            const usersToFetch = Array.from(pendingUsernames);
-            pendingUsernames.clear();
-            batchTimeout = null;
-
-            getTitles(usersToFetch).then(titles => {
-                usersToFetch.forEach(user => {
-                    const newTitle = titles[user] || "";
-                    const elements = usernameToElements.get(user) || [];
-
-                    if (newTitle) {
-                        titleCache[user] = newTitle;
-                        elements.forEach(el => {
-                            el.textContent = newTitle;
-                        });
-                    } else {
-                        titleCache[user] = ""; // cache the blank title so we don't refetch
-                        // don't overwrite existing el.textContent
-                    }
-
-                    usernameToElements.delete(user);
-                });
-            });
-        }, 50);
-    }
-}
-
-
 function LStorage(key, defaultValue) {
     let stored = localStorage.getItem(key);
     if (stored === null) {
@@ -294,6 +263,18 @@ function LStorage(key, defaultValue) {
     } catch (e) {
         localStorage.setItem(key, JSON.stringify(defaultValue));
         return defaultValue
+    }
+}
+// Read-only version of LStorage — never writes a default back to localStorage just
+// for having been read. Used by the theme system so simply opening the Theme Changer
+// (or exporting/polling) doesn't silently seed Discourse Extras' old built-in theme.
+function GetStorageRaw(key, fallback) {
+    const stored = localStorage.getItem(key);
+    if (stored === null) return fallback;
+    try {
+        return JSON.parse(stored)
+    } catch (e) {
+        return fallback
     }
 }
 function SetStorage(key, value) {
@@ -420,12 +401,18 @@ function getCurrentThemeObject() {
             Object
                 .keys(themeKeys)
                 .forEach(key => {
-                colors[key] = LStorage(key, themeKeys[key])
+                colors[key] = GetStorageRaw(key, themeKeys[key])
+            });
+            let extras = {};
+            Object
+                .keys(extraKeys)
+                .forEach(key => {
+                extras[key] = GetStorageRaw(key, extraKeys[key])
             });
             document
                 .body
                 .removeChild(container);
-            resolve({id, name, description, user, colors})
+            resolve({id, name, description, user, colors, extras})
         };
         document
             .body
@@ -433,114 +420,37 @@ function getCurrentThemeObject() {
         idInput.focus()
     })
 }
-function openMarketplace() {
-    if (document.querySelector("#theme-marketplace-popup")) return;
-
-    const mkplace = document.createElement("div");
-    mkplace.id = "theme-marketplace-popup";
-    mkplace.innerHTML = `
-        <header style="padding:20px; background-color:var(--primary); color:var(--secondary); display:flex;">
-          <i class="fa-solid fa-xmark close-mkplace" style="cursor:pointer;"></i>
-          <div style="margin:auto;">Theme Marketplace</div>
-        </header>
-        <div id="marketplace-content" style="padding:20px;"></div>
-        <footer style="padding:20px; border-top:1px solid #ccc; background:#f8f8f8; position:fixed; bottom:0; width:100%; display: flex;">
-          <button id="upload-current-theme" class="btn btn-primary">Upload Current Theme</button>
-        </footer>
-    `;
-    Object.assign(mkplace.style, {
-        zIndex: "1001",
-        width: "100vw",
-        height: "100vh",
-        position: "fixed",
-        top: "0",
-        left: "0",
-        backgroundColor: "var(--header_background)",
-        overflowY: "auto"
-    });
-
-    const closeBtn = mkplace.querySelector(".close-mkplace");
-    document.body.appendChild(mkplace);
-
-    const content = mkplace.querySelector("#marketplace-content");
-    const container = document.createElement("div");
-    container.style.display = "flex";
-    container.style.flexWrap = "wrap";
-    container.style.gap = "10px";
-    container.style.justifyContent = "flex-start";
-    content.appendChild(container);
-
-    renderMarketplaceThemes(container);
-
-    let interval = setInterval(() => {
-        renderMarketplaceThemes(container);
-    }, 5000);
-
-    closeBtn.onclick = () => {
-        mkplace.remove();
-        clearInterval(interval);
-    };
-
-    mkplace.querySelector("#upload-current-theme").onclick = () => {
-        getCurrentThemeObject().then(themeObj =>
-                                     addScript(themeObj)
-                                     .then(() => alert("Theme uploaded!"))
-                                     .catch(console.error)
-                                    );
-    };
+function importThemeFromJSON() {
+    const input = prompt("Paste a Discourse Extras theme JSON to import:");
+    if (!input) return;
+    let themeObj;
+    try {
+        themeObj = JSON.parse(input);
+    } catch (e) {
+        alert("Invalid theme JSON.");
+        return;
+    }
+    if (themeObj.colors) {
+        Object.entries(themeObj.colors).forEach(([key, val]) => SetStorage(key, val));
+    }
+    if (themeObj.extras) {
+        Object.entries(themeObj.extras).forEach(([key, val]) => SetStorage(key, val));
+    }
+    applyTheme();
+    dextraToast(`Imported theme "${themeObj.name || themeObj.id || "Unnamed"}"!`);
 }
 
-function renderMarketplaceThemes(container) {
-    getScripts().then(scripts => {
-        if (!Array.isArray(scripts)) {
-            container.innerHTML = "<p>Failed to load themes.</p>";
-            return;
-        }
-
-        container.innerHTML = ""; // Clear old content
-        scripts.sort((a, b) => a.name.localeCompare(b.name));
-        const perLine = 5;
-        const gapPx = 10;
-
-        scripts.forEach(script => {
-            const box = document.createElement("div");
-            box.style.flex = `0 0 calc(${100 / perLine}% - ${(gapPx * (perLine - 1)) / perLine}px)`;
-            box.style.boxSizing = "border-box";
-            box.style.border = "1px solid #ccc";
-            box.style.padding = "10px";
-            box.style.borderRadius = "6px";
-            box.style.background = "var(--secondary)";
-            box.style.minWidth = "0";
-
-            box.innerHTML = `
-                <div><b>${script.name || "Unnamed Theme"}</b> <i style="color:var(--primary-high);">${script.id}</i></div>
-                <div><i style="color:var(--primary-high); font-size:.8em;">by <a class='mention'>@${script.user || "unknown"}</a></i></div>
-                <div style="margin: 5px 0; font-size:90%">${script.description || "No description"}</div>
-                <button style="margin-top:5px;" class="apply-theme btn btn-primary">Apply</button>
-                ${getTextBetweenDashes(document.querySelector('img.avatar').src) === script.user ? `
-                  <button class="btn no-text btn-icon post-action-menu__delete delete btn-flat dextra_delete" title="delete this post" type="button">
-                    <svg class="fa d-icon d-icon-trash-can svg-icon svg-string" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-                      <use href="#trash-can"></use>
-                    </svg><span aria-hidden="true"></span></button>` : ''}
-            `;
-
-            box.querySelector(".apply-theme").onclick = () => {
-                if (script.colors) {
-                    Object.entries(script.colors).forEach(([key, val]) => SetStorage(key, val));
-                    applyTheme();
-                    location.reload();
-                } else {
-                    console.log(script);
-                }
-            };
-
-            const delBtn = box.querySelector(".dextra_delete");
-            if (delBtn) delBtn.onclick = () => deleteScript(script.id);
-
-            container.appendChild(box);
-        });
-    });
+function exportThemeToJSON() {
+    getCurrentThemeObject().then(themeObj => {
+        GM_setClipboard(JSON.stringify(themeObj));
+        dextraToast("Theme JSON copied to clipboard!");
+    }).catch(() => {});
 }
+
+const extraKeys = {
+    sLogoUrl: "",
+    sBackgroundUrl: ""
+};
 
 const themeKeys = {
     sPrimary: "#222222",
@@ -573,71 +483,47 @@ function hexToRgbString(hex) {
     return [(num >> 16) & 255, (num >> 8) & 255, num & 255].join(',');
 }
 
+// Only overrides a CSS variable when the user has actually chosen a value for it —
+// no built-in Discourse Extras color scheme gets forced onto Discourse's own theme.
+const themeCssVarMap = [
+    {key: "sPrimary", vars: ["--primary"]},
+    {key: "sPrimaryHigh", vars: ["--primary-high"]},
+    {key: "sPrimaryMedium", vars: ["--primary-medium"]},
+    {key: "sPrimaryLow", vars: ["--primary-low"]},
+    {key: "sBG", vars: ["--secondary", "--header_background", "--primary-very-low"]},
+    {key: "sBorder", vars: ["--primary-rgb"]},
+    {key: "sHighlight", vars: ["--d-sidebar-active-background"]},
+    {key: "sAccent", vars: ["--tertiary", "--tertiary-hover"]},
+    {key: "sAccentLow", vars: ["--tertiary-low", "--tertiary-med-or-tertiary", "--tertiary-50"]}
+];
 function applyTheme() {
-    document
-        .documentElement
-        .style
-        .setProperty('--primary', LStorage("sPrimary", "#000000"));
-    document
-        .documentElement
-        .style
-        .setProperty('--primary-high', LStorage("sPrimaryHigh", "#111111"));
-    document
-        .documentElement
-        .style
-        .setProperty('--primary-medium', LStorage("sPrimaryMedium", "#101010"));
-    document
-        .documentElement
-        .style
-        .setProperty('--primary-low', LStorage("sPrimaryLow", "#fefefe"));
-    document
-        .documentElement
-        .style
-        .setProperty('--secondary', LStorage("sBG", "#ffffff"));
-    document
-        .documentElement
-        .style
-        .setProperty('--secondary-rgb', hexToRgbString(LStorage("sBG", "#ffffff")));
-    document
-        .documentElement
-        .style
-        .setProperty('--primary-rgb', LStorage("sBorder", "#555555"));
-    document
-        .documentElement
-        .style
-        .setProperty('--d-sidebar-active-background', LStorage("sHighlight", "#eeeeff"));
-    document
-        .documentElement
-        .style
-        .setProperty('--tertiary', LStorage("sAccent", "#000000"));
-    document
-        .documentElement
-        .style
-        .setProperty('--tertiary-low', LStorage("sAccentLow", "#ffffff"));
-    document
-        .documentElement
-        .style
-        .setProperty('--tertiary-med-or-tertiary', LStorage("sAccentLow", "#0f0f0f"));
-    document
-        .documentElement
-        .style
-        .setProperty('--header_background', LStorage("sBG", "#0f0f0f"));
-    document
-        .documentElement
-        .style
-        .setProperty('--tertiary-50', LStorage("sAccentLow", "#0f0f0f"));
-    document
-        .documentElement
-        .style
-        .setProperty('--tertiary-hover', LStorage("sAccent", "0"));
-    document
-        .documentElement
-        .style
-        .setProperty('--primary-very-low', LStorage("sBG", "0"));
-    const logo = document.querySelector(".logo-big");
-    if (logo) {
-        logo.src = "https://us1.discourse-cdn.com/flex020/uploads/x_camp/original/1X/2cfa84d1826975a" +
-            "c3ea4973b91923be11dc36dd1.png"
+    themeCssVarMap.forEach(({key, vars}) => {
+        const stored = localStorage.getItem(key);
+        if (stored === null) {
+            vars.forEach(v => document.documentElement.style.removeProperty(v));
+            return;
+        }
+        const value = GetStorageRaw(key, null);
+        vars.forEach(v => document.documentElement.style.setProperty(v, value));
+    });
+    if (localStorage.getItem("sBG") !== null) {
+        document.documentElement.style.setProperty('--secondary-rgb', hexToRgbString(GetStorageRaw("sBG", "#ffffff")));
+    } else {
+        document.documentElement.style.removeProperty('--secondary-rgb');
+    }
+    const customLogoUrl = GetStorageRaw("sLogoUrl", extraKeys.sLogoUrl);
+    const siteLogo = document.querySelector("#site-logo");
+    if (siteLogo && customLogoUrl) {
+        siteLogo.src = customLogoUrl;
+    }
+    const backgroundUrl = GetStorageRaw("sBackgroundUrl", extraKeys.sBackgroundUrl);
+    if (backgroundUrl) {
+        document.body.style.backgroundImage = `url("${backgroundUrl}")`;
+        document.body.style.backgroundSize = "cover";
+        document.body.style.backgroundPosition = "center";
+        document.body.style.backgroundAttachment = "fixed";
+    } else {
+        document.body.style.backgroundImage = "";
     }
 }
 function addButtons() {
@@ -653,11 +539,18 @@ function addButtons() {
     panel.style.boxShadow = "0 0 8px rgba(0,0,0,0.2)";
     panel.style.fontSize = "14px";
     panel.style.display = "none";
-    const marketplace = document.createElement("button");
-    marketplace.classList = "btn btn-primary";
-    marketplace.textContent = "Theme Marketplace";
-    marketplace.onclick = () => {
-        openMarketplace()
+    const importBtn = document.createElement("button");
+    importBtn.classList = "btn btn-primary";
+    importBtn.textContent = "Import Theme (JSON)";
+    importBtn.onclick = () => {
+        importThemeFromJSON()
+    };
+    const exportBtn = document.createElement("button");
+    exportBtn.classList = "btn btn-default";
+    exportBtn.textContent = "Export Theme (JSON)";
+    exportBtn.style.marginLeft = "5px";
+    exportBtn.onclick = () => {
+        exportThemeToJSON()
     };
     const reset = document.createElement("button");
     reset.classList = "btn btn-default";
@@ -668,7 +561,8 @@ function addButtons() {
             clearTheme()
         }
     }
-    panel.appendChild(marketplace);
+    panel.appendChild(importBtn);
+    panel.appendChild(exportBtn);
     panel.appendChild(reset);
     const pickerBox = document.createElement("div");
     pickerBox.style.display = "flex";
@@ -690,7 +584,7 @@ function addButtons() {
         label.style.width = "130px";
         const input = document.createElement("input");
         input.type = "color";
-        input.value = LStorage(key, def);
+        input.value = GetStorageRaw(key, def);
         input.addEventListener("input", () => {
             SetStorage(key, input.value);
             applyTheme()
@@ -699,80 +593,76 @@ function addButtons() {
         row.appendChild(input);
         pickerBox.appendChild(row)
     });
+    const urlBox = document.createElement("div");
+    urlBox.style.display = "flex";
+    urlBox.style.flexDirection = "column";
+    urlBox.style.gap = "8px";
+    urlBox.style.marginTop = "10px";
+    [
+        {key: "sLogoUrl", label: "Logo URL"},
+        {key: "sBackgroundUrl", label: "Background URL"}
+    ].forEach(({key, label}) => {
+        const row = document.createElement("div");
+        row.style.display = "flex";
+        row.style.alignItems = "center";
+        row.style.gap = "8px";
+        const urlLabel = document.createElement("label");
+        urlLabel.textContent = label;
+        urlLabel.style.width = "130px";
+        const input = document.createElement("input");
+        input.type = "text";
+        input.placeholder = "https://...";
+        input.style.flex = "1";
+        input.value = GetStorageRaw(key, extraKeys[key]);
+        input.addEventListener("change", () => {
+            SetStorage(key, input.value);
+            applyTheme()
+        });
+        row.appendChild(urlLabel);
+        row.appendChild(input);
+        urlBox.appendChild(row)
+    });
+    pickerBox.appendChild(urlBox);
     panel.appendChild(pickerBox);
     document
         .body
         .appendChild(panel);
     const toggleButton = document.createElement("li");
-    toggleButton.classList = "sidebar-section-link-wrapper";
-    toggleButton.innerHTML = `          <a id="ember5" class="ember-view sidebar-section-link sidebar-row" title="All topics" data-link-name="dextra" href="javascript:void(0)">
-      <span class="sidebar-section-link-prefix icon">
-          <svg class="fa d-icon d-icon-layer-group svg-icon prefix-icon svg-string" xmlns="http://www.w3.org/2000/svg"><use href="#palette"></use></svg>
-</span>
-            <span class="sidebar-section-link-content-text">
-              Theme Changer
-            </span>
-</a>`;
-    toggleButton.onclick = () => {
-        if (panel.style.display === "none") {
-            panel.style.display = "block"
-        } else {
-            panel.style.display = "none"
-        }
+    toggleButton.className = "header-dropdown-toggle dextra-theme-header-icon";
+    toggleButton.innerHTML = `
+    <a href="javascript:void(0)" class="btn no-text icon btn-flat" tabindex="0" title="Theme Changer">
+      <svg class="fa d-icon d-icon-palette svg-icon fa-width-auto svg-string" width="1em" height="1em" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><use href="#palette"></use></svg>
+    </a>
+  `;
+    toggleButton.onclick = (e) => {
+        e.preventDefault();
+        panel.style.display = panel.style.display === "none" ? "block" : "none";
     };
-    document
-        .querySelector("#sidebar-section-content-community")
-        .appendChild(toggleButton)
+    dextraThemeToggleButton = toggleButton;
+}
+let dextraThemeToggleButton = null;
+function dextraWireThemeHeaderIcon() {
+    if (!dextraThemeToggleButton || document.querySelector(".dextra-theme-header-icon")) return;
+    const chatIcon = document.querySelector(".chat-header-icon");
+    if (!chatIcon) return;
+    chatIcon.insertAdjacentElement("afterend", dextraThemeToggleButton);
 }
 function watchAndApplyTheme() {
-    let last = JSON.stringify(Object.fromEntries(Object.keys(themeKeys).map(k => [
+    const allKeys = Object.assign({}, themeKeys, extraKeys);
+    let last = JSON.stringify(Object.fromEntries(Object.keys(allKeys).map(k => [
         k,
-        LStorage(k, themeKeys[k])
+        GetStorageRaw(k, allKeys[k])
     ])));
     setInterval(() => {
-        const now = JSON.stringify(Object.fromEntries(Object.keys(themeKeys).map(k => [
+        const now = JSON.stringify(Object.fromEntries(Object.keys(allKeys).map(k => [
             k,
-            LStorage(k, themeKeys[k])
+            GetStorageRaw(k, allKeys[k])
         ])));
         if (now !== last) {
             applyTheme();
             last = now
         }
     }, 1000)
-}
-const API_URL = 'https://ethan-codes.com/discourse-extras-theme/';
-async function getScripts() {
-    const res = await fetch(API_URL);
-    if (!res.ok) {
-        throw new Error('Failed to fetch scripts')
-    }
-    return await res.json()
-}
-async function addScript(scriptObj) {
-    const res = await fetch(API_URL, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(scriptObj)
-    });
-    if (!res.ok) {
-        throw new Error('Failed to add script')
-    }
-    return await res.json()
-}
-async function deleteScript(id) {
-    const res = await fetch(API_URL, {
-        method: 'DELETE',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: `{ "id": "${id}"}`
-    });
-    if (!res.ok) {
-        throw new Error('Failed to add script')
-    }
-    return await res.json()
 }
 GM_addStyle(`
   .mfp-bg {
@@ -781,7 +671,143 @@ GM_addStyle(`
   .c-navbar-container {
       z-index:10000;
   }
+  .dextra-toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 14px 20px;
+    background-color: var(--secondary);
+    color: var(--primary);
+    text-align: left;
+    z-index: 99999;
+    border: 1px solid var(--primary-low);
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    cursor: pointer;
+    transition: transform 0.2s, opacity 0.2s;
+    user-select: none;
+  }
+  .dextra-toast:hover {
+    transform: scale(1.03);
+  }
+  .dextra-section .sidebar-section-header-wrapper.sidebar-row {
+    transition: background-color 0.3s;
+  }
+  .dextra-section .sidebar-section-header-wrapper.sidebar-row:hover {
+    background-color: var(--primary-low);
+  }
+  /* AntiCrash reuses Discourse's own .alert component as-is — only the
+     <summary> marker needs a couple of lines on top of that. */
+  .dextra-anticrash-shield summary {
+    cursor: pointer;
+    list-style: none;
+  }
+  .dextra-anticrash-shield summary::-webkit-details-marker {
+    display: none;
+  }
+  .dextra-fav.dextra-fav-active {
+    color: #f1c40f;
+  }
+  .dextra-fav-row {
+    display: flex;
+    align-items: center;
+  }
+  .dextra-fav-row .sidebar-section-link {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dextra-fav-empty {
+    padding: 6px 10px;
+    opacity: 0.6;
+    font-size: 0.9em;
+  }
+  .dextra-blocked-placeholder {
+    padding: 6px 0;
+  }
+  .dextra-blocked-show {
+    opacity: 0.7;
+    font-style: italic;
+  }
+  .dextra-intro {
+    position: fixed;
+    inset: 0;
+    z-index: 999999;
+    background: #000;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 6px;
+    cursor: pointer;
+    animation: dextra-intro-fade 2.6s ease forwards;
+  }
+  .dextra-intro .dextra-intro-studio {
+    font-size: 2.2em;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    opacity: 0;
+    animation: dextra-intro-pop 1.6s ease forwards 0.15s;
+  }
+  .dextra-intro .dextra-intro-tag {
+    font-size: 0.85em;
+    color: #999;
+    letter-spacing: 0.05em;
+    opacity: 0;
+    animation: dextra-intro-pop 1.6s ease forwards 0.5s;
+  }
+  @keyframes dextra-intro-pop {
+    0% { opacity: 0; transform: scale(0.92); }
+    35% { opacity: 1; transform: scale(1); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  @keyframes dextra-intro-fade {
+    0% { opacity: 1; }
+    70% { opacity: 1; }
+    100% { opacity: 0; visibility: hidden; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dextra-intro { display: none; }
+  }
 `);
+function dextraShowIntro() {
+    if (sessionStorage.getItem("dextraIntroShown")) return;
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    sessionStorage.setItem("dextraIntroShown", "true");
+    const intro = document.createElement("div");
+    intro.className = "dextra-intro";
+    intro.innerHTML = `
+      <div class="dextra-intro-studio">DEVCAT STUDIOS</div>
+      <div class="dextra-intro-tag">More for viewing, less for writing.</div>
+    `;
+    intro.onclick = () => intro.remove();
+    document.body.appendChild(intro);
+    setTimeout(() => intro.remove(), 2700);
+}
+function dextraToast(message, duration = 3000) {
+    document.querySelectorAll(".dextra-toast").forEach(t => t.remove());
+    const toast = document.createElement("div");
+    toast.className = "dextra-toast";
+    toast.textContent = message;
+    let opacity = 1;
+    let fade = null;
+    const dismiss = () => {
+        if (fade) return;
+        fade = setInterval(() => {
+            opacity -= 0.1;
+            toast.style.opacity = String(opacity);
+            if (opacity <= 0) {
+                clearInterval(fade);
+                toast.remove();
+            }
+        }, 15);
+    };
+    toast.onclick = dismiss;
+    document.body.appendChild(toast);
+    setTimeout(dismiss, duration);
+}
 var script = document.createElement("script");
 script.src = "https://kit.fontawesome.com/fcc6f02ae0.js";
 script.crossOrigin = "anonymous";
@@ -1058,10 +1084,88 @@ function parseCustomBBCodeRecursive(text) {
     return parseSegment(text);
 }
 
+// Legacy tag syntax (!{cmd arg...}) from pre-4.0 versions of the script, kept for backwards compatibility.
+function parseLegacyBBCode(text) {
+    const regex = /!\{(.*?)\}/gs;
+    return text.replace(regex, (match, p1) => {
+        const ql = p1.split("</p>").join("").split("<p>").join("").split(/[\n ]+/);
+        const cmd = ql[0];
+        const arg = ql[1];
+        const argt = ql.slice(2).join(" ");
+        let mna;
+        switch (cmd) {
+            case "phantom":
+                mna = "";
+                break;
+            case "bgc":
+                mna = `<span style="background-color:${arg}">`;
+                break;
+            case "color":
+                mna = `<span style="color:${arg}">`;
+                break;
+            case "style":
+                mna = `<span style="${arg} ${argt}">`;
+                break;
+            case "s":
+                mna = "</span>";
+                break;
+            case "size":
+                mna = `<span style="font-size:${arg}px;">`;
+                break;
+            case "codepen":
+                mna = `<iframe src="https://cdpn.io/${arg}/fullpage/${argt}?view=" frameborder="0" style="width:90%;height:600px;clip-path: inset(120px 0 0 0); margin-top: -120px;"></iframe>`;
+                break;
+            case "embed": {
+                const pw = `${arg} ${argt}`.replace('<a href="', "");
+                mna = `<iframe rel="" style="width:900px;height:600px;" src="${pw}" frameborder="0"></iframe>`;
+                break;
+            }
+            case "mention":
+                mna = `<a class='mention'>${arg} ${argt}</a>`;
+                break;
+            case "pm":
+                try {
+                    const username = document.querySelector("img.avatar").src.split("/")[6];
+                    const argspl = arg.split("|:|");
+                    const arg1 = decodeObfuscated(argspl[0], username);
+                    const arg2 = decodeObfuscated(argspl[1], username);
+                    if (arg1 === "[This message is NOT for you!]" && arg2 === "[This message is NOT for you!]") {
+                        mna = `<blockquote>[This message is NOT for you!]</blockquote>`;
+                    } else if (arg1 === "[This message is NOT for you!]") {
+                        mna = `<blockquote>${arg2}</blockquote>`;
+                    } else {
+                        mna = `<blockquote>${arg1}</blockquote>`;
+                    }
+                } catch {
+                    mna = `<blockquote>Incorrectly formatted message</blockquote>`;
+                }
+                break;
+            case "html":
+                mna = `<iframe srcdoc="${arg} ${argt}"></iframe>`;
+                break;
+            case "emoji":
+                mna = argt ? `<i class="fa-${argt} fa-${arg}"></i>` : `<i class="fa-solid fa-${arg}"></i>`;
+                break;
+            default:
+                mna = "<span style='color:red; background-color:yellow; padding:1px; margin:1px; border: 1px solid red;'>Invalid Discourse Extras Tag!</span>";
+                break;
+        }
+        return mna;
+    });
+}
+
 function walkAndReplace(node) {
     if (node.nodeType === Node.TEXT_NODE) {
-        if (node.textContent.includes("[")) {
-            const frag = parseCustomBBCodeRecursive(node.textContent);
+        const text = node.textContent;
+        if (text.includes("!{")) {
+            const temp = document.createElement('div');
+            temp.innerHTML = parseLegacyBBCode(text);
+            for (const child of Array.from(temp.childNodes)) {
+                walkAndReplace(child);
+            }
+            node.replaceWith(...Array.from(temp.childNodes));
+        } else if (text.includes("[")) {
+            const frag = parseCustomBBCodeRecursive(text);
             node.replaceWith(frag);
         }
     } else if (node.nodeType === Node.ELEMENT_NODE) {
@@ -1072,9 +1176,124 @@ function walkAndReplace(node) {
 }
 
 
+// Discourse's server-side cook step wraps anything it recognizes as math in
+// <span class="math"> (inline) or <div class="math"> (block display math) before
+// the post ever reaches the client — confirmed from the actual incident that
+// started this feature. Only text inside those wrappers ever reaches MathJax/KaTeX,
+// so LaTeX-shaped text sitting *outside* them (e.g. someone just typing the literal
+// characters "\boxed{}\boxed{}...") is inert — it renders as plain text, at zero
+// cost, and must not be flagged.
+function dextraExtractMathSegments(html) {
+    const matches = html.match(/<(span|div) class="math"[^>]*>[\s\S]*?<\/\1>/g) || [];
+    return matches.join(" ");
+}
+
+// Returns null if the content looks safe, or a {reason, detail} object explaining
+// exactly what tripped the check — shown to the user instead of a generic warning.
+function dextraAntiCrashRisk(html) {
+    // Raw size alone says nothing about render cost — a long tutorial or code-heavy
+    // post can easily pass 20k characters and still be completely harmless to render.
+    // What actually matters is whether the length comes from one token repeated over
+    // and over (a padding bomb) vs. genuinely varied content (real writing). Coverage
+    // is the right test here, not character-set diversity — the printable alphabet is
+    // only ~90 characters, so *any* sufficiently long text looks "low diversity" by
+    // that measure, prose included. Requires one repeating run to make up the
+    // majority of the whole post before this fires.
+    if (html.length > 50000) {
+        const runMatch = html.match(/(.{1,100}?)\1{99,}/);
+        if (runMatch && runMatch[0].length > html.length * 0.5) {
+            return {
+                reason: "oversized, repetitive content",
+                detail: `This post is ${html.length.toLocaleString()} characters long, and over half of it is a single pattern repeated back-to-back — the profile of a padding bomb, not real writing.`
+            };
+        }
+    }
+
+    const mathSegments = dextraExtractMathSegments(html);
+    const mathSpanCount = (html.match(/<(span|div) class="math"/g) || []).length;
+
+    // Deep nesting is the real danger, not raw size — a tiny string like
+    // \boxed{\boxed{\boxed{...}}} repeated 70x is exponentially expensive for
+    // MathJax/KaTeX to lay out even though it's under a kilobyte on the wire.
+    // Scoped to actual math segments only — see dextraExtractMathSegments above.
+    const nestedMatch = mathSegments.match(/(\\[a-zA-Z]+\{){15,}/);
+    if (nestedMatch) {
+        const depth = (nestedMatch[0].match(/\\[a-zA-Z]+\{/g) || []).length;
+        return {
+            reason: "deeply nested LaTeX",
+            detail: `Found a LaTeX command nested ${depth} levels deep in a row (e.g. \\boxed{\\boxed{\\boxed{...}}}) inside actual math markup. Small source, but exponentially expensive for MathJax/KaTeX to typeset.`
+        };
+    }
+
+    // Many separate math expressions can add up even if none of them is individually
+    // deep — a flood of simple ones is still real work for MathJax/KaTeX to typeset.
+    if (mathSpanCount > 80) {
+        return {
+            reason: "math expression flood",
+            detail: `${mathSpanCount} separate math expressions were found in one post — even simple ones add up fast for MathJax/KaTeX.`
+        };
+    }
+
+    // Generic fallback: a short structural token repeated back-to-back a lot — covers
+    // spoiler-nesting bombs the same way the LaTeX check above covers \boxed{}.
+    // Must actually be a real HTML tag (<...>) or one of Discourse Extras' own tag
+    // syntaxes ([tag]/[/tag] or !{tag}) — both of those get walked/parsed and can be
+    // genuinely expensive when nested. Backslash-LaTeX-looking text like "\boxed{}"
+    // sitting outside a real math span is neither: it's inert plain text, so it must
+    // NOT match here either — same reasoning as the math-segment scoping above.
+    const repeatMatch = html.match(/(.{2,20}?)\1{19,}/);
+    if (repeatMatch && /^(<[a-zA-Z]|\[\/?[a-zA-Z]|!\{)/.test(repeatMatch[1])) {
+        const times = Math.floor(repeatMatch[0].length / repeatMatch[1].length);
+        return {
+            reason: "repeated pattern bomb",
+            detail: `The pattern "${escapeHtml(repeatMatch[1]).slice(0, 20)}" repeats back-to-back ${times}+ times in a row.`
+        };
+    }
+
+    // Scoped to actual math segments only, same reasoning as the nesting check above.
+    const latexHits = (mathSegments.match(/\$\$|\\\[|\\begin\{|\\frac|\\sum|\\int|\\boxed|\\underbrace|\\overbrace|\\sqrt|\\left/g) || []).length;
+    if (latexHits > 20) {
+        return {
+            reason: "dense LaTeX",
+            detail: `${latexHits} separate LaTeX render triggers were found inside this post's math markup.`
+        };
+    }
+
+    const spoilerHits = (html.match(/\[spoiler\]|!\{phantom\}|!\{size |\[size /g) || []).length;
+    if (spoilerHits > 15) {
+        return {
+            reason: "nested spoiler bomb",
+            detail: `${spoilerHits} spoiler/size tags were found in one post.`
+        };
+    }
+    return null;
+}
+function dextraShowAntiCrashShield(element, rawHtml, iscooked, risk) {
+    element.innerHTML = "";
+    const shield = document.createElement("details");
+    shield.className = "alert alert-error dextra-anticrash-shield";
+    shield.innerHTML = `
+      <summary>&#9888;&#65039; Held back by AntiCrash &mdash; ${risk.reason}</summary>
+      <p>${risk.detail}</p>
+      <button class="btn btn-default btn-small dextra-anticrash-show" type="button">Show anyway</button>
+    `;
+    shield.querySelector(".dextra-anticrash-show").onclick = (e) => {
+        e.preventDefault();
+        element.dataset.dextraAnticrashApproved = "true";
+        element.innerHTML = rawHtml;
+        processCookedElement(element, iscooked);
+    };
+    element.appendChild(shield);
+}
 function processCookedElement(element, iscooked = false) {
+    if (element.dataset.dextraAnticrashApproved !== "true") {
+        const risk = dextraAntiCrashRisk(element.innerHTML);
+        if (risk) {
+            dextraShowAntiCrashShield(element, element.innerHTML, iscooked, risk);
+            return;
+        }
+    }
     walkAndReplace(element);
-    if (iscooked) applyTitle(element);
     element.classList.add("cooked");
 
     const fpo = element.parentElement;
@@ -1121,6 +1340,20 @@ function processCookedElement(element, iscooked = false) {
             };
             const editbutton = place.querySelector(".post-action-menu__show-more");
             place.insertBefore(button, editbutton);
+
+            const postId = Number(fpo.parentElement.parentElement.parentElement.getAttribute('data-post-id'));
+            const favButton = document.createElement("button");
+            favButton.innerHTML = `<svg class="fa d-icon d-icon-star svg-icon svg-string" xmlns="http://www.w3.org/2000/svg"><use href="#star"></use></svg>`;
+            favButton.classList = "btn no-text btn-icon btn-flat dextra-fav";
+            favButton.title = "Favorite this post";
+            if (dextraGetFavorites().some(f => f.postId === postId)) favButton.classList.add("dextra-fav-active");
+            favButton.onclick = () => {
+                const title = document.title.replace(/^\(\d+\)\s*/, "");
+                const url = `${location.origin}${location.pathname}`;
+                dextraToggleFavorite(postId, title, url);
+                favButton.classList.toggle("dextra-fav-active");
+            };
+            place.insertBefore(favButton, editbutton);
         }
     }
 
@@ -1145,167 +1378,146 @@ setInterval(() => {
         .forEach(element => {
         processCookedElement(element, false)
     })
-    titleStuff();
-}, 800);
-function doit() {
-    var droot = document.querySelector(".discourse-root");
-    var html = `<div class="modal-container">
-
-
-    <div class="modal d-modal create-invite-modal" data-keyboard="false" aria-modal="true" role="dialog" aria-labelledby="discourse-modal-title">
-        <div class="d-modal__container">
-
-
-            <div class="d-modal__header">
-
-
-<!---->
-                <div class="d-modal__title">
-                  <h1 id="discourse-modal-title" class="d-modal__title-text">Encode Message</h1>
-
-<!---->
-
-                </div>
-
-
-
-
-    <button class="btn no-text btn-icon btn-transparent modal-close dextra-hailnah2" title="close" type="button">
-<svg class="fa d-icon d-icon-xmark svg-icon svg-string" xmlns="http://www.w3.org/2000/svg"><use href="#xmark"></use></svg>      <span aria-hidden="true">
-          ​
-        </span>
-    </button>
-
-
-                          </div>
-
-
-<!---->
-
-
-<!---->
-
-          <div class="d-modal__body" tabindex="-1">
-
-            <p>
-              Copy text that will create a secret message.
-            </p>
-            <br>
-            Text to be displayed
-            <textarea class="dextra-yay" style="resize:none;"></textarea>
-            <br>
-            User to be sent to (set blank to be visible to everyone)
-            <input type="text" class="dextra-useryay">
-
-          </div>
-
-            <div class="d-modal__footer">
-
-
-
-    <button class="btn btn-text btn-primary dextra-lesgo" autofocus="true" type="button">
-<!----><span class="d-button-label">Copy and close<!----></span>
-    </button>
-
-
-
-
-    <button class="btn btn-text btn-transparent dextra-hailnah" type="button">
-<!----><span class="d-button-label">Cancel<!----></span>
-    </button>
-
-
-
-            </div>
-
-
-        </div>
-      </div>
-
-        <div class="d-modal__backdrop"></div>
-    </div>`;
-    var ele = document.createElement("div");
-    var key = "";
-    ele.innerHTML = html;
-    ele
-        .querySelector(".dextra-lesgo")
-        .onclick = function () {
-        if (document.querySelector(".dextra-yay").value == "") {
-            alert("gib me text");
-            return
-        }
-        var val = document
-        .querySelector(".dextra-yay")
-        .value;
-        if (document.querySelector(".dextra-useryay").value == "") {
-            key = "discourse"
-        } else {
-            key = document
-                .querySelector(".dextra-useryay")
-                .value
-        }
-        var username = document
-        .querySelector("img.avatar")
-        .src
-        .split("/")[6];
-        GM_setClipboard("[pm]" + encodeObfuscated("dextrapm" + val, key) + "|:|" + encodeObfuscated("dextrapm" + val, username) + "[/pm]");
-        ele.remove()
-    };
-    ele
-        .querySelector(".dextra-hailnah")
-        .onclick = function () {
-        ele.remove()
-    };
-    ele
-        .querySelector(".dextra-hailnah2")
-        .onclick = function () {
-        ele.remove()
-    };
-    droot.appendChild(ele)
-}
-async function waitForElement(selector, timeout = 5000) {
-    const start = Date.now();
-
-    while (true) {
-        const el = document.querySelector(selector);
-        if (el) return el;
-        if (Date.now() - start > timeout) throw new Error(`Timeout waiting for ${selector}`);
-
-        // wait a bit before checking again, so browser doesn’t freeze
-        await new Promise(resolve => setTimeout(resolve, 100));
+    const emailsDisabledNotice = document.getElementById("global-notice-alert-emails-disabled");
+    if (emailsDisabledNotice && emailsDisabledNotice.textContent !== "Thanks for using Discourse Extras!") {
+        emailsDisabledNotice.textContent = "Thanks for using Discourse Extras!";
     }
+    dextraWireComposerPmShorthand();
+    dextraWireComposerPmButton();
+    dextraWireFlagSpamButton();
+    dextraWireBumpWarning();
+    dextraApplyBlockedUsers();
+    dextraWireUserCardBlockButton();
+    dextraWireThemeHeaderIcon();
+}, 800);
+
+// ===== PM shorthand + editor button (moved out of the sidebar and into the composer) =====
+function dextraTranslatePmShorthand(textarea) {
+    const regex = /\[pm\s+(\S+)\]([\s\S]*?)\[\/pm\]/;
+    const match = textarea.value.match(regex);
+    if (!match) return;
+    const targetUser = match[1];
+    const message = match[2];
+    let username;
+    try {
+        username = document.querySelector("img.avatar").src.split("/")[6];
+    } catch (e) {
+        return;
+    }
+    const encoded = "[pm]" + encodeObfuscated("dextrapm" + message, targetUser) + "|:|" + encodeObfuscated("dextrapm" + message, username) + "[/pm]";
+    textarea.value = textarea.value.replace(regex, encoded);
+    textarea.dispatchEvent(new Event("input", {bubbles: true}));
+}
+function dextraWireComposerPmShorthand() {
+    document.querySelectorAll("textarea.d-editor-input").forEach(textarea => {
+        if (textarea.dataset.dextraPmWired) return;
+        textarea.dataset.dextraPmWired = "true";
+        textarea.addEventListener("input", () => dextraTranslatePmShorthand(textarea));
+    });
+}
+function dextraWireComposerPmButton() {
+    document.querySelectorAll(".d-editor-button-bar").forEach(bar => {
+        if (bar.querySelector(".dextra-pm-btn")) return;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn no-text btn-flat dextra-pm-btn";
+        btn.title = "Insert secret PM";
+        btn.innerHTML = `<svg class="fa d-icon d-icon-lock svg-icon svg-string" xmlns="http://www.w3.org/2000/svg"><use href="#lock"></use></svg>`;
+        btn.onclick = (e) => {
+            e.preventDefault();
+            const editor = bar.closest(".d-editor");
+            const textarea = editor ? editor.querySelector("textarea.d-editor-input") : null;
+            doit(textarea);
+        };
+        bar.appendChild(btn);
+    });
 }
 
-waitForElement('#sidebar-section-content-community').then(elhasmentos => {
-    startOnlineWidget(getTextBetweenDashes(document.querySelector("img.avatar").src))
-    SetStorage("sHighlight", "#ffffff");
-    applyTheme();
-    addButtons();
-    watchAndApplyTheme();
-    const bcode = `
-          <a id="ember5" class="ember-view sidebar-section-link sidebar-row" title="All topics" data-link-name="dextra" href="javascript:void(0)">
-      <span class="sidebar-section-link-prefix icon">
-          <svg class="fa d-icon d-icon-layer-group svg-icon prefix-icon svg-string" xmlns="http://www.w3.org/2000/svg"><use href="#code"></use></svg>
-</span>
-            <span class="sidebar-section-link-content-text">
-              Encode Message
-            </span>
-</a>
-`;
-    var ab = document.createElement("li");
-    ab.classList = "sidebar-section-link-wrapper";
-    ab.innerHTML = bcode;
-    ab.onclick = doit;
-    document
-        .querySelector("#sidebar-section-content-community")
-        .appendChild(ab);
-    document
-        .querySelectorAll('.cooked')
-        .forEach(processCookedElement);
+// ===== Favorite Posts (moved out of the sidebar, star lives next to the raw-markdown button) =====
+function dextraGetFavorites() {
+    return LStorage("dextraFavorites", []);
+}
+function dextraSetFavorites(list) {
+    SetStorage("dextraFavorites", list);
+    dextraRenderFavoritesSidebar();
+}
+function dextraToggleFavorite(postId, title, url) {
+    const favs = dextraGetFavorites();
+    const idx = favs.findIndex(f => f.postId === postId);
+    if (idx >= 0) {
+        favs.splice(idx, 1);
+    } else {
+        favs.push({postId, title, url});
+    }
+    dextraSetFavorites(favs);
+}
+function buildFavoritesSidebarSection() {
+    if (document.querySelector('[data-section-name="dextra-favorites"]')) {
+        return document.getElementById("sidebar-section-content-dextra-favorites");
+    }
+    const community = document.querySelector("#sidebar-section-content-community");
+    if (!community) return null;
+    const section = document.createElement("div");
+    section.className = "sidebar-section sidebar-section-wrapper sidebar-section--expanded dextra-section";
+    section.setAttribute("data-section-name", "dextra-favorites");
+    section.innerHTML = `
+    <div class="sidebar-section-header-wrapper sidebar-row">
+      <button class="btn no-text sidebar-section-header sidebar-section-header-collapsable btn-transparent dextra-section-toggle" aria-controls="sidebar-section-content-dextra-favorites" aria-expanded="true" title="Toggle section" type="button">
+        <span class="sidebar-section-header-caret"><svg class="fa d-icon d-icon-star svg-icon prefix-icon svg-string" xmlns="http://www.w3.org/2000/svg"><use href="#star"></use></svg></span>
+        <span class="sidebar-section-header-text">Favorite Posts</span>
+      </button>
+    </div>
+    <ul id="sidebar-section-content-dextra-favorites" class="sidebar-section-content"></ul>
+  `;
+    const communitySection = community.closest(".sidebar-section-wrapper");
+    communitySection.parentElement.appendChild(section);
+    section.querySelector(".dextra-section-toggle").onclick = () => {
+        const content = section.querySelector("#sidebar-section-content-dextra-favorites");
+        content.style.display = content.style.display === "none" ? "" : "none";
+    };
+    return section.querySelector("#sidebar-section-content-dextra-favorites");
+}
+function dextraRenderFavoritesSidebar() {
+    const list = buildFavoritesSidebarSection();
+    if (!list) return;
+    list.innerHTML = "";
+    const favs = dextraGetFavorites();
+    if (favs.length === 0) {
+        const li = document.createElement("li");
+        li.className = "sidebar-section-link-wrapper dextra-fav-empty";
+        li.textContent = "No favorites yet";
+        list.appendChild(li);
+        return;
+    }
+    favs.forEach(fav => {
+        const li = document.createElement("li");
+        li.className = "sidebar-section-link-wrapper dextra-fav-row";
+        const a = document.createElement("a");
+        a.className = "sidebar-section-link sidebar-row";
+        a.href = fav.url;
+        a.textContent = fav.title;
+        const remove = document.createElement("button");
+        remove.className = "btn no-text btn-icon btn-flat";
+        remove.innerHTML = "&times;";
+        remove.title = "Remove favorite";
+        remove.onclick = (e) => {
+            e.preventDefault();
+            dextraToggleFavorite(fav.postId);
+        };
+        li.appendChild(a);
+        li.appendChild(remove);
+        list.appendChild(li);
+    });
+}
+
+// ===== Flag Spam Posts (moved out of the sidebar, now lives next to the topic's notification-tracking button) =====
+function dextraCreateFlagSpamButton() {
     const spamRegex = /This is the spam/i;
-    const btn = document.createElement('div');
-    btn.innerHTML = `<a id="ember5" class="ember-view sidebar-section-link sidebar-row" title="All topics" data-link-name="dextra" href="javascript:void(0)"><span class="sidebar-section-link-prefix icon"><svg class="fa d-icon svg-icon svg-string" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><use href="#flag"></use></svg></span><span class="sidebar-section-link-content-text">Flag Spam Posts</span></a>`;
-    btn.style.width = "100%";
+    const btn = document.createElement("button");
+    btn.className = "btn btn-default no-text btn-icon dextra-flagspam-btn";
+    btn.title = "Flag Spam Posts";
+    btn.type = "button";
+    btn.innerHTML = `<svg class="fa d-icon svg-icon svg-string" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><use href="#flag"></use></svg>`;
     btn.onclick = () => {
         const posts = document.querySelectorAll('.topic-post');
         const spamPosts = [];
@@ -1564,15 +1776,334 @@ waitForElement('#sidebar-section-content-community').then(elhasmentos => {
         }
         window.addEventListener('message', onMessage)
     };
-    const sidebar = document.querySelector('#sidebar-section-content-community');
-    if (sidebar) {
-        const wrapper = document.createElement('li');
-        wrapper.className = "sidebar-section-link-wrapper";
-        wrapper.appendChild(btn);
-        sidebar.appendChild(wrapper)
+    return btn;
+}
+function dextraWireFlagSpamButton() {
+    document.querySelectorAll('[data-identifier="notifications-tracking"]').forEach(trigger => {
+        const parent = trigger.parentElement;
+        if (!parent || parent.querySelector(".dextra-flagspam-btn")) return;
+        const btn = dextraCreateFlagSpamButton();
+        trigger.insertAdjacentElement("afterend", btn);
+    });
+}
+
+// ===== Don't-bump warning: confirm before replying to a topic that's been dead a while =====
+const DEXTRA_BUMP_WARN_DAYS = 14;
+let dextraBumpConfirmed = false;
+function dextraGetTopicLastActivityMs() {
+    const times = document.querySelectorAll(".topic-post .relative-date[data-time]");
+    if (!times.length) return null;
+    const last = times[times.length - 1];
+    const t = Number(last.getAttribute("data-time"));
+    return t || null;
+}
+function dextraIsReplyingToExistingTopic() {
+    // #reply-control itself carries a composer-action-* class telling you what mode
+    // you're in (composer-action-reply vs. composer-action-createTopic, etc). Verified
+    // against the live DOM — .reply-details never existed, which is why this never
+    // fired before.
+    const rc = document.querySelector("#reply-control");
+    return !!rc && rc.classList.contains("composer-action-reply");
+}
+function dextraShowBumpWarning(days, btn) {
+    if (document.querySelector(".dextra-bump-warning")) return;
+    const modalHTML = `
+<div class="modal-container dextra-bump-warning">
+  <div class="modal d-modal create-invite-modal" aria-modal="true" role="dialog">
+    <div class="d-modal__container">
+      <div class="d-modal__header">
+        <div class="d-modal__title"><h1 class="d-modal__title-text">Bump this topic?</h1></div>
+      </div>
+      <div class="d-modal__body"><p>This topic hasn't had a reply in ${days} days. Are you sure you want to bump it?</p></div>
+      <div class="d-modal__footer">
+        <button class="btn btn-text btn-primary dextra-bump-yes" type="button">Yes, post anyway</button>
+        <button class="btn btn-text btn-transparent dextra-bump-no" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <div class="d-modal__backdrop"></div>
+</div>`;
+    const droot = document.querySelector(".discourse-root") || document.body;
+    droot.insertAdjacentHTML("beforeend", modalHTML);
+    const modal = document.querySelector(".dextra-bump-warning");
+    modal.querySelector(".dextra-bump-yes").onclick = () => {
+        modal.remove();
+        dextraBumpConfirmed = true;
+        btn.click();
+    };
+    modal.querySelector(".dextra-bump-no").onclick = () => modal.remove();
+}
+function dextraWireBumpWarning() {
+    document.querySelectorAll("#reply-control .btn.btn-primary.create").forEach(btn => {
+        if (btn.dataset.dextraBumpWired) return;
+        btn.dataset.dextraBumpWired = "true";
+        btn.addEventListener("click", function (e) {
+            if (dextraBumpConfirmed) {
+                dextraBumpConfirmed = false;
+                return;
+            }
+            if (!dextraIsReplyingToExistingTopic()) return;
+            const lastMs = dextraGetTopicLastActivityMs();
+            if (!lastMs) return;
+            const days = Math.floor((Date.now() - lastMs) / 86400000);
+            if (days < DEXTRA_BUMP_WARN_DAYS) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            dextraShowBumpWarning(days, btn);
+        }, true);
+    });
+}
+
+// ===== Block user (from their user card) =====
+function dextraGetBlockedUsers() {
+    return LStorage("dextraBlockedUsers", []);
+}
+function dextraSetBlockedUsers(list) {
+    SetStorage("dextraBlockedUsers", list);
+}
+function dextraIsBlocked(username) {
+    return dextraGetBlockedUsers().includes(username);
+}
+function dextraToggleBlockUser(username) {
+    const list = dextraGetBlockedUsers();
+    const idx = list.indexOf(username);
+    const wasBlocked = idx >= 0;
+    if (wasBlocked) {
+        list.splice(idx, 1);
     } else {
-        console.warn("Sidebar not found, cannot insert Flag Spam button.")
+        list.push(username);
     }
+    dextraSetBlockedUsers(list);
+    if (wasBlocked) {
+        document.querySelectorAll(`.dextra-blocked-placeholder[data-dextra-blocked-placeholder="${CSS.escape(username)}"]`).forEach(placeholder => {
+            const showBtn = placeholder.querySelector(".dextra-blocked-show");
+            if (showBtn) showBtn.click();
+        });
+    }
+}
+function dextraGetPostAuthorUsername(postEl) {
+    const names = postEl.querySelector(".names.trigger-user-card");
+    if (!names) return null;
+    const el = names.querySelector(".second") || names.querySelector(".first");
+    return el ? el.textContent.trim() : null;
+}
+function dextraUpdatePlaceholderText(placeholder) {
+    const count = placeholder.dataset.dextraBlockedCount;
+    const username = placeholder.dataset.dextraBlockedPlaceholder;
+    placeholder.querySelector(".dextra-blocked-show").textContent = `Show ${count} message${count === "1" ? "" : "s"} from blocked user @${username}`;
+}
+function dextraApplyBlockedUsers() {
+    const blocked = dextraGetBlockedUsers();
+    if (blocked.length === 0) return;
+    const posts = Array.from(document.querySelectorAll(".topic-post"));
+    posts.forEach(post => {
+        if (post.dataset.dextraBlockedPlaceholder) return;
+        if (post.dataset.dextraBlockedHidden === "true") return;
+        const username = dextraGetPostAuthorUsername(post);
+        if (!username || !blocked.includes(username)) return;
+        post.style.display = "none";
+        post.dataset.dextraBlockedHidden = "true";
+        const prev = post.previousElementSibling;
+        if (prev && prev.dataset && prev.dataset.dextraBlockedPlaceholder === username) {
+            prev.dataset.dextraBlockedCount = String(Number(prev.dataset.dextraBlockedCount) + 1);
+            dextraUpdatePlaceholderText(prev);
+            return;
+        }
+        const placeholder = document.createElement("div");
+        placeholder.className = "dextra-blocked-placeholder";
+        placeholder.dataset.dextraBlockedPlaceholder = username;
+        placeholder.dataset.dextraBlockedCount = "1";
+        placeholder.innerHTML = `<button class="btn btn-flat dextra-blocked-show" type="button"></button>`;
+        dextraUpdatePlaceholderText(placeholder);
+        placeholder.querySelector(".dextra-blocked-show").onclick = () => {
+            let node = placeholder.nextElementSibling;
+            let count = Number(placeholder.dataset.dextraBlockedCount);
+            while (node && count > 0 && node.dataset && node.dataset.dextraBlockedHidden === "true") {
+                node.style.display = "";
+                delete node.dataset.dextraBlockedHidden;
+                count--;
+                node = node.nextElementSibling;
+            }
+            placeholder.remove();
+        };
+        post.parentElement.insertBefore(placeholder, post);
+    });
+}
+function dextraWireUserCardBlockButton() {
+    document.querySelectorAll(".card-content").forEach(card => {
+        if (card.querySelector(".dextra-block-btn")) return;
+        const featured = card.querySelector(".featured-topic");
+        if (!featured) return;
+        const link = card.querySelector('a[href^="/u/"]');
+        if (!link) return;
+        const username = decodeURIComponent(link.getAttribute("href").split("/u/")[1].split("/")[0].split("?")[0]);
+        if (!username) return;
+        const btn = document.createElement("button");
+        btn.className = "btn btn-default dextra-block-btn";
+        btn.type = "button";
+        const refresh = () => {
+            btn.textContent = dextraIsBlocked(username) ? `Unblock @${username}` : `Block @${username}`;
+        };
+        refresh();
+        btn.onclick = () => {
+            dextraToggleBlockUser(username);
+            refresh();
+        };
+        featured.insertAdjacentElement("afterend", btn);
+    });
+}
+
+function doit(targetTextarea) {
+    var droot = document.querySelector(".discourse-root");
+    var html = `<div class="modal-container">
+
+
+    <div class="modal d-modal create-invite-modal" data-keyboard="false" aria-modal="true" role="dialog" aria-labelledby="discourse-modal-title">
+        <div class="d-modal__container">
+
+
+            <div class="d-modal__header">
+
+
+<!---->
+                <div class="d-modal__title">
+                  <h1 id="discourse-modal-title" class="d-modal__title-text">Encode Message</h1>
+
+<!---->
+
+                </div>
+
+
+
+
+    <button class="btn no-text btn-icon btn-transparent modal-close dextra-hailnah2" title="close" type="button">
+<svg class="fa d-icon d-icon-xmark svg-icon svg-string" xmlns="http://www.w3.org/2000/svg"><use href="#xmark"></use></svg>      <span aria-hidden="true">
+          ​
+        </span>
+    </button>
+
+
+                          </div>
+
+
+<!---->
+
+
+<!---->
+
+          <div class="d-modal__body" tabindex="-1">
+
+            <p>
+              Copy text that will create a secret message.
+            </p>
+            <br>
+            Text to be displayed
+            <textarea class="dextra-yay" style="resize:none;"></textarea>
+            <br>
+            User to be sent to (set blank to be visible to everyone)
+            <input type="text" class="dextra-useryay">
+
+          </div>
+
+            <div class="d-modal__footer">
+
+
+
+    <button class="btn btn-text btn-primary dextra-lesgo" autofocus="true" type="button">
+<!----><span class="d-button-label">Copy and close<!----></span>
+    </button>
+
+
+
+
+    <button class="btn btn-text btn-transparent dextra-hailnah" type="button">
+<!----><span class="d-button-label">Cancel<!----></span>
+    </button>
+
+
+
+            </div>
+
+
+        </div>
+      </div>
+
+        <div class="d-modal__backdrop"></div>
+    </div>`;
+    var ele = document.createElement("div");
+    var key = "";
+    ele.innerHTML = html;
+    ele
+        .querySelector(".dextra-lesgo")
+        .onclick = function () {
+        if (document.querySelector(".dextra-yay").value == "") {
+            alert("gib me text");
+            return
+        }
+        var val = document
+        .querySelector(".dextra-yay")
+        .value;
+        if (document.querySelector(".dextra-useryay").value == "") {
+            key = "discourse"
+        } else {
+            key = document
+                .querySelector(".dextra-useryay")
+                .value
+        }
+        var username = document
+        .querySelector("img.avatar")
+        .src
+        .split("/")[6];
+        var pmTag = "[pm]" + encodeObfuscated("dextrapm" + val, key) + "|:|" + encodeObfuscated("dextrapm" + val, username) + "[/pm]";
+        if (targetTextarea) {
+            var start = targetTextarea.selectionStart ?? targetTextarea.value.length;
+            var end = targetTextarea.selectionEnd ?? targetTextarea.value.length;
+            targetTextarea.value = targetTextarea.value.slice(0, start) + pmTag + targetTextarea.value.slice(end);
+            targetTextarea.dispatchEvent(new Event("input", {bubbles: true}));
+            targetTextarea.focus();
+        } else {
+            GM_setClipboard(pmTag);
+        }
+        ele.remove()
+    };
+    ele
+        .querySelector(".dextra-hailnah")
+        .onclick = function () {
+        ele.remove()
+    };
+    ele
+        .querySelector(".dextra-hailnah2")
+        .onclick = function () {
+        ele.remove()
+    };
+    droot.appendChild(ele)
+}
+async function waitForElement(selector, timeout = 5000) {
+    const start = Date.now();
+
+    while (true) {
+        const el = document.querySelector(selector);
+        if (el) return el;
+        if (Date.now() - start > timeout) throw new Error(`Timeout waiting for ${selector}`);
+
+        // wait a bit before checking again, so browser doesn’t freeze
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+}
+
+waitForElement('#sidebar-section-content-community').then(elhasmentos => {
+    dextraShowIntro();
+    applyTheme();
+    addButtons();
+    watchAndApplyTheme();
+    dextraWireThemeHeaderIcon();
+    dextraRenderFavoritesSidebar();
+    document
+        .querySelectorAll('.cooked')
+        .forEach(processCookedElement);
+    dextraWireComposerPmShorthand();
+    dextraWireComposerPmButton();
+    dextraWireFlagSpamButton();
 }).catch(err => {
     console.error('not found:', err);
 });

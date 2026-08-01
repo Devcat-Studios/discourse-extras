@@ -1,0 +1,21 @@
+{
+  "id": "discord-dark",
+  "name": "Discord Dark",
+  "description": "Discord's classic dark mode palette — blurple accent, dark greys, light text.",
+  "user": "",
+  "colors": {
+    "sPrimary": "#dcddde",
+    "sPrimaryHigh": "#ffffff",
+    "sPrimaryMedium": "#96989d",
+    "sPrimaryLow": "#202225",
+    "sBG": "#36393f",
+    "sBorder": "#202225",
+    "sHighlight": "#393c43",
+    "sAccent": "#5865F2",
+    "sAccentLow": "rgb(64, 68, 75)"
+  },
+  "extras": {
+    "sLogoUrl": "",
+    "sBackgroundUrl": ""
+  }
+}
