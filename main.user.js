@@ -1158,8 +1158,17 @@ function walkAndReplace(node) {
     if (node.nodeType === Node.TEXT_NODE) {
         const text = node.textContent;
         if (text.includes("!{")) {
+            const converted = parseLegacyBBCode(text);
+            if (converted === text) {
+                // Nothing actually matched — e.g. an unclosed "!{" with no "}"
+                // anywhere after it. Leave it as plain text. Without this check,
+                // recursing on unchanged output loops forever (stack overflow):
+                // the string still contains "!{", parseLegacyBBCode returns the
+                // exact same string again, forever.
+                return;
+            }
             const temp = document.createElement('div');
-            temp.innerHTML = parseLegacyBBCode(text);
+            temp.innerHTML = converted;
             for (const child of Array.from(temp.childNodes)) {
                 walkAndReplace(child);
             }
